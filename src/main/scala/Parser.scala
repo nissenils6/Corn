@@ -1,10 +1,6 @@
 import scala.annotation.tailrec
 
 case class ParserState(tokens: List[Token], file: File) {
-  def withTokens(newTokens: List[Token]): ParserState = ParserState(newTokens, file)
-
-  def withTokensTail: ParserState = ParserState(tokens.tail, file)
-
   def expectKeyword(keyword: String): ParserState = tokens match {
     case KeywordToken(key, _) :: rest if key == keyword => this withTokens rest
     case token :: _ => throw Error.unexpected(token, keyword)
@@ -16,6 +12,9 @@ case class ParserState(tokens: List[Token], file: File) {
     case token :: _ => throw Error.unexpected(token, symbol)
     case _ => throw Error.unexpected(symbol, file)
   }
+
+  def withTokens(newTokens: List[Token]): ParserState = ParserState(newTokens, file)
+  def withTokensTail: ParserState = ParserState(tokens.tail, file)
 }
 
 abstract class Expr() {
@@ -70,8 +69,7 @@ abstract class GlobalStmt {
 
   override def toString: String = this match {
     case LetGlobalStmt(pattern, expr, _) => s"let $pattern = $expr"
-    case FunGlobalStmt(name, parameters, returnType, expr, _) =>
-      s"fun $name(${parameters.mkString(", ")}): $returnType => $expr"
+    case FunGlobalStmt(name, parameters, returnType, expr, _) => s"fun $name(${parameters.mkString(", ")}): $returnType => $expr"
   }
 }
 
@@ -79,8 +77,7 @@ case class LetGlobalStmt(pattern: Pattern, expr: Expr, range: FilePosRange) exte
 
 case class FunGlobalStmt(name: String, parameters: List[Pattern], returnType: Expr, expr: Expr, range: FilePosRange) extends GlobalStmt
 
-private def parseSep[T](state: ParserState, element: ParserState => (T, ParserState), sep: String, end: String,
-                        desc: String): (List[T], ParserState, FilePosRange) = {
+private def parseSep[T](state: ParserState, element: ParserState => (T, ParserState), sep: String, end: String, desc: String): (List[T], ParserState, FilePosRange) = {
   def rec(state: ParserState): (List[T], ParserState, FilePosRange) = if (state.tokens.isEmpty) {
     throw Error.unexpected(s"'$end' or '$sep'", state.file)
   } else if (state.tokens.head.isSymbol(sep)) {
@@ -132,7 +129,7 @@ private def parseExpr(precedence: Int)(state: ParserState): (Expr, ParserState) 
     }, newState)
   case SymbolToken("{", startRange) :: exprTokens =>
     val (body, newState, endRange) = parseSep(state withTokens exprTokens, parseStmt, ";", "}", "expression")
-    val lastExpr = body.last
+    val lastExpr = body.lastOption.getOrElse(UnitExpr(endRange))
     val exprs = body.dropRight(1)
     parseExpr(precedence)(BlockExpr(exprs, lastExpr, startRange to endRange), newState)
   case KeywordToken("let", startRange) :: patternTokens =>

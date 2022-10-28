@@ -1,25 +1,24 @@
 import scala.collection.mutable
 
 class CodeGen {
-  private var globalVarCount = 0
   private val globalVars = mutable.StringBuilder()
   private val funs = mutable.Buffer[AsmBuilder]()
   private val initCode = AsmBuilder(None)
-  
+  private var globalVarCount = 0
   def createGlobalVar(size: Int): Int = {
     val varId = globalVarCount
     globalVars.append(s"V$varId:\n  alloc $size")
     globalVarCount += 1
     varId
   }
-  
+
   def createFun(): AsmBuilder = {
     val funId = funs.length
     val fun = AsmBuilder(Some(funId))
     funs.append(fun)
     fun
   }
-  
+
   def initFun: AsmBuilder = initCode
 }
 

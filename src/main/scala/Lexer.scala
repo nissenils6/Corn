@@ -2,14 +2,14 @@ import scala.annotation.{targetName, unused}
 
 type LexerResult = Either[Error, Token]
 
-case class LexerState(chars: List[Char], pos: FilePos)
-
 extension (result: LexerResult)
   def isIgnored = result match {
     case Right(WhitespaceToken(_, _)) => true
     case Right(CommentToken(_, _)) => true
     case _ => false
   }
+
+case class LexerState(chars: List[Char], pos: FilePos)
 
 abstract class Token() {
   def range: FilePosRange
@@ -68,27 +68,6 @@ private val escapedCharsInverted = escapedChars.map(_.swap)
 private val symbols = Set(":", "::", "...", "=>", "=")
 private val specialSymbols = "()[]{}.,;".toSet
 private val keywords = Set("let", "fun")
-
-private def isIdenStart(char: Char) = char.isLetter || char == '_'
-private def isIden(char: Char) = char.isLetter || char.isDigit || char == '_'
-
-private def isSym(char: Char) = idenSymbols.contains(char)
-
-private def isNumberStart(char: Char) = char.isDigit
-private def isNumber(char: Char) = char.isDigit || char == '.' || char == '_'
-
-private def isWhitespace(char: Char) = char.isWhitespace
-
-def escapeChar(char: Char): Char = escapedChars(char)
-def unescapeChar(char: Char): String = if (escapedCharsInverted.contains(char)) {
-  "\\" + escapedCharsInverted(char)
-} else {
-  "" + char
-}
-
-private def onLexerState(f: Char => Boolean)(lexerState: LexerState) =
-  lexerState.chars.nonEmpty && f(lexerState.chars.head)
-
 private val nextChar = State[LexerState, (Char, FilePos)](state =>
   ((state.chars.head, state.pos), LexerState(state.chars.tail, state.pos + 1))
 )
@@ -102,18 +81,6 @@ private val nextEscapedChar = nextChar.flatMap {
   case ('\\', filePos) => nextChar.map(t => (escapeChar(t._1), filePos until t._2))
   case (c, filePos) => State.insert((c, filePos.range))
 }
-
-private def nextString(terminator: Char) = nextEscapedChar.takeWhile(onLexerState(_ != terminator)).map(list => (
-  list.map(_._1), (list.head._2 - 1) until list.lastOption.map(_._2).getOrElse(list.head._2)
-))
-
-@targetName("nextChar")
-private def next(f: Char => Boolean, c: (Char, FilePos)): State[LexerState, (String, FilePosRange)] =
-  next(f, (c._1.toString, c._2.exlRange))
-
-private def next(f: Char => Boolean, s: (String, FilePosRange)): State[LexerState, (String, FilePosRange)] = for {
-  chars <- nextChar.takeWhile(onLexerState(f))
-} yield (s._1 + chars.map(_._1).mkString, (s._2 - (s._1.length - 1)) until chars.lastOption.map(_._2.exlRange).getOrElse(s._2))
 
 private val nextElement: State[LexerState, LexerResult] = nextChar.flatMap {
   case (c, pos) if specialSymbols.contains(c) => State.insert(Right(SymbolToken(c.toString, pos.range)))
@@ -152,6 +119,31 @@ private val nextElement: State[LexerState, LexerResult] = nextChar.flatMap {
     case 1 => Right(FloatToken(string._1.toFloat, string._2))
     case _ => Left(Error.lexical(s"Floating point literals cannot contain multiple decimal points", string._2))
   })
+  case c => next(isUnsupported, c).map(string => Left(Error.lexical(s"Unsupported string of characters", string._2)))
 }
+
+def escapeChar(char: Char): Char = escapedChars(char)
+def unescapeChar(char: Char): String = if (escapedCharsInverted.contains(char)) {
+  "\\" + escapedCharsInverted(char)
+} else {
+  "" + char
+}
+
+private def isIdenStart(char: Char) = char.isLetter || char == '_'
+private def isNumberStart(char: Char) = char.isDigit
+private def isNumber(char: Char) = char.isDigit || char == '.' || char == '_'
+private def isUnsupported(char: Char) = !isSym(char) && !isIden(char) && !isWhitespace(char) && !specialSymbols.contains(char) && char != '\'' && char != '"'
+private def isIden(char: Char) = char.isLetter || char.isDigit || char == '_'
+private def isSym(char: Char) = idenSymbols.contains(char)
+private def isWhitespace(char: Char) = char.isWhitespace
+private def nextString(terminator: Char) = nextEscapedChar.takeWhile(onLexerState(_ != terminator)).map(list => (list.map(_._1), (list.head._2 - 1) until list.lastOption.map(_._2).getOrElse(list.head._2)))
+private def onLexerState(f: Char => Boolean)(lexerState: LexerState) = lexerState.chars.nonEmpty && f(lexerState.chars.head)
+
+@targetName("nextChar")
+private def next(f: Char => Boolean, c: (Char, FilePos)): State[LexerState, (String, FilePosRange)] = next(f, (c._1.toString, c._2.exlRange))
+
+private def next(f: Char => Boolean, s: (String, FilePosRange)): State[LexerState, (String, FilePosRange)] = for {
+  chars <- nextChar.takeWhile(onLexerState(f))
+} yield (s._1 + chars.map(_._1).mkString, (s._2 - (s._1.length - 1)) until chars.lastOption.map(_._2.exlRange).getOrElse(s._2))
 
 val tokenize: State[LexerState, List[LexerResult]] = nextElement.takeWhile(_._1.nonEmpty).map(_.filterNot(_.isIgnored))

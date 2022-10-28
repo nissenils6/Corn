@@ -16,12 +16,12 @@ case class AnalyzedVarPattern[T <: AnalyzerVar](patternVar: T, range: FilePosRan
 
 case class AnalyzedTuplePattern[T <: AnalyzerVar](elements: List[AnalyzedPattern[T]], range: FilePosRange) extends AnalyzedPattern[T]
 
-def mapPattern[T <: AnalyzerVar](varConstructor: (String, ConstVal => ConstVal, Expr) => T, pattern: Pattern): AnalyzedPattern[T] = {
+def mapPattern[T <: AnalyzerVar](varConstructor: (String, ConstVal => ConstVal, Expr, FilePosRange) => T, pattern: Pattern): AnalyzedPattern[T] = {
   def tupleNav(index: Int)(constVal: ConstVal): ConstVal = constVal.asInstanceOf[ConstTuple].elements(index)
 
   def rec(pattern: Pattern, patternNav: Option[ConstVal => ConstVal]): AnalyzedPattern[T] = pattern match {
     case VarPattern(name, datatype, range) =>
-      val variable = varConstructor(name, patternNav.getOrElse(constVal => constVal), datatype)
+      val variable = varConstructor(name, patternNav.getOrElse(constVal => constVal), datatype, range)
       AnalyzedVarPattern[T](variable, range)
     case TuplePattern(elements, range) =>
       AnalyzedTuplePattern[T](elements.zipWithIndex.map((pattern, index) => rec(pattern, Some(patternNav match {

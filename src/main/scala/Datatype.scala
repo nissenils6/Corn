@@ -12,7 +12,7 @@ abstract class Datatype {
     case IntDatatype => (true, true)
     case TypeDatatype => (false, true)
     case TupleDatatype(elements) => (elements.forall(_.runtime), elements.forall(_.compiletime))
-    case FunDatatype(_, _) => (true, false)
+    case FunDatatype(_, _) => (true, true)
   }
 
   override def toString: String = this match {
@@ -40,8 +40,10 @@ abstract class ConstVal {
     case ConstInt(_) => IntDatatype
     case ConstType(_) => TypeDatatype
     case ConstTuple(elements) => TupleDatatype(elements.map(_.datatype))
-    case ConstFunction(function) => FunDatatype(function.args.map(_.datatype), function.returnType)
+    case ConstFunction(function) => function.signature
   }
+
+  def toInt: Int = asInstanceOf[ConstInt].int
 
   override def toString: String = this match {
     case ConstUnit => "()"
