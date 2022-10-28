@@ -99,7 +99,7 @@ private val nextCharOption = State[LexerState, Option[(Char, FilePos)]] {
 }
 
 private val nextEscapedChar = nextChar.flatMap {
-  case ('\\', filePos) => nextChar.map(_.mapLeft(escapeChar).mapRight(filePos.until))
+  case ('\\', filePos) => nextChar.map(t => (escapeChar(t._1), filePos until t._2))
   case (c, filePos) => State.insert((c, filePos.range))
 }
 
@@ -109,7 +109,7 @@ private def nextString(terminator: Char) = nextEscapedChar.takeWhile(onLexerStat
 
 @targetName("nextChar")
 private def next(f: Char => Boolean, c: (Char, FilePos)): State[LexerState, (String, FilePosRange)] =
-  next(f, c.map(_.toString, _.exlRange))
+  next(f, (c._1.toString, c._2.exlRange))
 
 private def next(f: Char => Boolean, s: (String, FilePosRange)): State[LexerState, (String, FilePosRange)] = for {
   chars <- nextChar.takeWhile(onLexerState(f))

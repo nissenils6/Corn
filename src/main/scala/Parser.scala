@@ -25,9 +25,9 @@ abstract class Expr() {
     case CallExpr(fun, posArgs, keywordArgs, _) => s"$fun(${posArgs.mkString(", ")}${keywordArgs.map(t => s", ${t._1} = ${t._2}").mkString})"
     case RefExpr(iden, _) => iden
     case IntExpr(int, _) => int.toString
-    case TupleExpr(content, _) => s"(${content.mkString(", ")})"
-    case BlockExpr(content, lastExpr, _) =>
-      s"{\n${content.map(expr => s"${" " * (i + 1)}${expr.format(i + 1)};\n").mkString}${" " * (i + 1)}${lastExpr.format(i + 1)}\n${" " * i}}"
+    case TupleExpr(elements, _) => s"(${elements.mkString(", ")})"
+    case BlockExpr(exprs, lastExpr, _) =>
+      s"{\n${exprs.map(expr => s"${" " * (i + 1)}${expr.format(i + 1)};\n").mkString}${" " * (i + 1)}${lastExpr.format(i + 1)}\n${" " * i}}"
     case UnitExpr(_) => "()"
     case DotExpr(expr, iden, _) => s"${expr.format(i)}.$iden"
     case LetExpr(pattern, expr, _) => s"let $pattern = ${expr.format(i)}"
@@ -42,7 +42,7 @@ case class RefExpr(iden: String, range: FilePosRange) extends Expr
 
 case class IntExpr(int: Int, range: FilePosRange) extends Expr
 
-case class TupleExpr(content: List[Expr], range: FilePosRange) extends Expr
+case class TupleExpr(elements: List[Expr], range: FilePosRange) extends Expr
 
 case class BlockExpr(exprs: List[Expr], lastExpr: Expr, range: FilePosRange) extends Expr
 
@@ -57,13 +57,13 @@ abstract class Pattern {
 
   override def toString: String = this match {
     case VarPattern(name, dataType, _) => s"$name: $dataType"
-    case TuplePattern(content, _) => s"(${content.mkString(", ")})"
+    case TuplePattern(elements, _) => s"(${elements.mkString(", ")})"
   }
 }
 
 case class VarPattern(name: String, datatype: Expr, range: FilePosRange) extends Pattern
 
-case class TuplePattern(content: List[Pattern], range: FilePosRange) extends Pattern
+case class TuplePattern(elements: List[Pattern], range: FilePosRange) extends Pattern
 
 abstract class GlobalStmt {
   def range: FilePosRange
@@ -193,7 +193,10 @@ private def parseGlobalStmt(state: ParserState): (GlobalStmt, ParserState) = sta
 }
 
 @tailrec
-def parseGlobalStmts(stmts: List[GlobalStmt], state: ParserState): (List[GlobalStmt], ParserState) = if (state.tokens.nonEmpty) {
-  val (stmt, newState) = parseGlobalStmt(state)
-  parseGlobalStmts(stmt :: stmts, newState)
-} else (stmts, state)
+def parseGlobalStmts(stmts: List[GlobalStmt], state: ParserState): (List[GlobalStmt], ParserState) = state.tokens match {
+  case SymbolToken(";", _) :: rest => parseGlobalStmts(stmts, state withTokens rest)
+  case tokens if tokens.nonEmpty =>
+    val (stmt, newState) = parseGlobalStmt(state)
+    parseGlobalStmts(stmt :: stmts, newState)
+  case _ => (stmts, state)
+}

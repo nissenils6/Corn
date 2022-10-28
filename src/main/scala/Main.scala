@@ -22,8 +22,11 @@ def compile(filePath: String): Unit = try for {
   println(parserState.tokens.mkString(" "))
   println()
 
-  println(parseFile(parserState).mkString("\n\n"))
+  val parsedFile = parseFile(parserState)
+  println(parsedFile.mkString("\n\n"))
   println()
+
+  analyzeFile(parsedFile, parserState.file)
 } catch {
   case error: Error =>
     println(error)
