@@ -2,12 +2,13 @@ import scala.annotation.{targetName, unused}
 
 type LexerResult = Either[Error, Token]
 
-extension (result: LexerResult)
+extension (result: LexerResult) {
   def isIgnored = result match {
     case Right(WhitespaceToken(_, _)) => true
     case Right(CommentToken(_, _)) => true
     case _ => false
   }
+}
 
 case class LexerState(chars: List[Char], pos: FilePos)
 

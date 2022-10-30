@@ -34,8 +34,14 @@ object State {
   def insert[S, A](a: A): State[S, A] = State(s => (a, s))
 }
 
-extension[T] (list: List[Option[T]])
+extension[T] (list: List[Option[T]]) {
   def extract: Option[List[T]] = if list.forall(_.nonEmpty) then Some(list.map(_.get)) else None
+}
+
+extension (int: Int) {
+  def roundUp(powerOf2: Int): Int = (int & ~(powerOf2 - 1)) + (if (int & (powerOf2 - 1)) > 0 then powerOf2 else 0)
+  def roundDown(powerOf2: Int): Int = if powerOf2 > 0 then math.floorDiv(int, powerOf2) * powerOf2 else int
+}
 
 abstract class Error extends Exception {
   def errorType: String

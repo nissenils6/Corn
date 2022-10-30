@@ -9,6 +9,11 @@ abstract class AnalyzerVar {
 abstract class GlobalVar extends AnalyzerVar {
   def module: Module
   def constVal: Option[ConstVal]
+
+  lazy val label: Option[String] = if datatype.runtime then Some((constVal match {
+    case Some(value) => CodeGen.data(value)
+    case None => CodeGen.bss(datatype.size, datatype.align)
+  })._1) else None
 }
 
 class BuiltinGlobalVar(val module: Module, val name: String, value: ConstVal) extends GlobalVar {
@@ -46,11 +51,13 @@ abstract class GlobalFun {
   def typeCheck(): Unit
 
   def constEval(args: List[ConstVal]): Option[ConstVal]
+  def generateCode: List[Instr]
 
-  lazy val signature: Datatype = FunDatatype(argTypes, returnType)
+  lazy val signature: FunDatatype = FunDatatype(argTypes, returnType)
+  lazy val label: String = CodeGen.function(generateCode)
 }
 
-class BuiltinGlobalFun(val module: Module, val name: String, val argTypes: List[Datatype], val returnType: Datatype, evalFunction: List[ConstVal] => Option[ConstVal]) extends GlobalFun {
+class BuiltinGlobalFun(val module: Module, val name: String, val argTypes: List[Datatype], val returnType: Datatype, evalFunction: List[ConstVal] => Option[ConstVal], generateFunction: () => List[Instr]) extends GlobalFun {
   override def range: FilePosRange = module.file.lastRange
 
   override def format(indentation: Int): String = s"builtin fun $name(${argTypes.mkString(", ")}): $returnType"
@@ -58,34 +65,61 @@ class BuiltinGlobalFun(val module: Module, val name: String, val argTypes: List[
   override def typeCheck(): Unit = ()
 
   override def constEval(args: List[ConstVal]): Option[ConstVal] = evalFunction(args)
+
+  override def generateCode: List[Instr] = generateFunction()
 }
 
 class UserGlobalFun(val module: Module, val name: String, retTypeExpr: Expr, expr: Expr, val range: FilePosRange) extends GlobalFun {
   val params: mutable.Map[String, LocalVar] = mutable.Map()
   var args: List[AnalyzedPattern[LocalVar]] = null
 
-  lazy val analyzedExpr: AnalyzedExpr = analyzeExpr(ExprParsingContext(module, Some(this)))(expr)
+  lazy val analyzedExpr: AnalyzedExpr = analyzeExpr(new ExprParsingContext(module, Some(this)))(expr)
 
   lazy val argTypes: List[Datatype] = args.map(_.datatype)
-  lazy val returnType: Datatype = analyzeExpr(ExprParsingContext(module, None))(retTypeExpr).constDatatype
+  lazy val returnType: Datatype = analyzeExpr(new ExprParsingContext(module, None))(retTypeExpr).constDatatype
 
   override def format(indentation: Int): String = s"fun $name(${args.map(_.format(indentation)).mkString(", ")}): $returnType => ${analyzedExpr.format(indentation)}"
 
-  override def typeCheck(): Unit = {
-    if (returnType != analyzedExpr.returnType) throw Error.unimplemented(module.file)
-  }
+  override def typeCheck(): Unit = if (returnType != analyzedExpr.returnType) throw Error.unimplemented(module.file)
 
   override def constEval(arguments: List[ConstVal]): Option[ConstVal] = {
-    val ctx = ExprConstEvalContext()
-    args.zip(arguments).foreach(t => ctx(t._1) = t._2)
+    val ctx = new ExprConstEvalContext()
+    args.zip(arguments).foreach(t => ctx.add(t._1, t._2))
     analyzedExpr.constEval(ctx)
+  }
+
+  override def generateCode: List[Instr] = {
+    val ctx = new ExprCodeGenContext()
+
+    ctx.add(Asm.Sub(Reg.RSP, 8))
+
+    params.values.foreach(ctx.add)
+
+    def iterateArgs(arg: AnalyzedPattern[LocalVar], argOffset: Int): Unit = arg match {
+      case AnalyzedVarPattern(patternVar, _) => patternVar.datatype.generateCopyCode(ctx, Reg.RSP + ctx.lookup(patternVar), Reg.RSP + argOffset)
+      case AnalyzedTuplePattern(elements, _) => elements.zip(Datatype.alignSequence(elements.map(_.datatype))._3).foreach(t => iterateArgs(t._1, argOffset + t._2))
+    }
+
+    args.zip(signature.argOffsets).foreach(t => iterateArgs(t._1, t._2 + 16))
+
+    analyzedExpr.generateCode(ctx)
+
+    ctx.add(Load(Reg.RAX, Reg.RSP + (signature.argSize + 24)))
+
+    returnType.generateCopyCode(ctx, Address(Reg.RAX), Reg.RSP + (-returnType.size))
+
+    ctx.add(
+      Asm.Add(Reg.RSP, 8),
+      Ret()
+    )
+    ctx.code
   }
 }
 
 class GlobalFunTable(val module: Module, val name: String) {
   val funs = mutable.Buffer[GlobalFun]()
 
-  def format(indentation: Int): String = s"${funs.map(f => s"${" " * indentation}${f.format(indentation)}\n").mkString}"
+  def format(indentation: Int): String = s"${funs.map(f => s"${" " * indentation}${f.format(indentation)}\n\n").mkString}"
 }
 
 class Module(val file: File) {
@@ -114,7 +148,7 @@ class Module(val file: File) {
 
     val formattedBuiltin = section(vars.filter(_._2.isInstanceOf[BuiltinGlobalVar]).map(v => s"${" " * (indentation + 1)}${v._2.asInstanceOf[BuiltinGlobalVar].format(indentation + 1)}\n").mkString)
     val formattedVars = section(varInits.map(v => s"${" " * (indentation + 1)}${v.format(indentation + 1)}\n").mkString)
-    val formattedFuns = section(funTables.map(_._2.format(indentation + 1)).mkString("\n"))
-    s"${" " * indentation}module ${file.name} {\n$formattedBuiltin$formattedVars$formattedFuns\n${" " * indentation}}\n"
+    val formattedFuns = section(funTables.map(_._2.format(indentation + 1)).mkString)
+    s"${" " * indentation}module ${file.name} {\n$formattedBuiltin$formattedVars$formattedFuns${" " * indentation}}\n"
   }
 }

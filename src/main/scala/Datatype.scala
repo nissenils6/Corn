@@ -1,9 +1,16 @@
+import Datatype.alignSequence
+
+import scala.collection.mutable
+
 abstract class Datatype {
   lazy val (size: Int, align: Int) = this match {
     case UnitDatatype => (0, 0)
     case IntDatatype => (8, 8)
     case TypeDatatype => (0, 0)
-    case TupleDatatype(elements) => (elements.map(_.size).sum, elements.map(_.align).max)
+    case TupleDatatype(elements) => {
+      val (size, align, _) = Datatype.alignSequence(elements)
+      (size, align)
+    }
     case FunDatatype(_, _) => (8, 8)
   }
 
@@ -13,6 +20,15 @@ abstract class Datatype {
     case TypeDatatype => (false, true)
     case TupleDatatype(elements) => (elements.forall(_.runtime), elements.forall(_.compiletime))
     case FunDatatype(_, _) => (true, true)
+  }
+
+  def generateCopyCode(ctx: ExprCodeGenContext, dst: Address, src: Address): Unit = this match {
+    case UnitDatatype => ()
+    case IntDatatype | FunDatatype(_, _) => ctx.add(
+      Load(Reg.RAX, src),
+      Store(dst, Reg.RAX)
+    )
+    case TupleDatatype(elements) => elements.zip(alignSequence(elements)._3).foreach(t => t._1.generateCopyCode(ctx, dst + t._2, src + t._2))
   }
 
   override def toString: String = this match {
@@ -32,7 +48,27 @@ case object TypeDatatype extends Datatype
 
 case class TupleDatatype(elements: List[Datatype]) extends Datatype
 
-case class FunDatatype(params: List[Datatype], returnType: Datatype) extends Datatype
+case class FunDatatype(params: List[Datatype], returnType: Datatype) extends Datatype {
+  lazy val (argSize: Int, argAlignment: Int, argOffsets: List[Int]) = {
+    val (size, align, offsets) = alignSequence(params)
+    (size, align, offsets.zip(params).map(t => size - t._1 - t._2.size))
+  }
+}
+
+object Datatype {
+  def alignSequence(elements: List[Datatype]): (Int, Int, List[Int]) = {
+    var size = 0
+    var align = 1
+    val offsets = mutable.Buffer[Int]()
+    for (element <- elements) {
+      size = size.roundUp(element.align)
+      offsets.append(size)
+      size += element.size
+      align = align.max(element.align)
+    }
+    (size, align, offsets.toList)
+  }
+}
 
 abstract class ConstVal {
   lazy val datatype: Datatype = this match {

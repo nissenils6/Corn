@@ -1,3 +1,6 @@
+import java.io.PrintWriter
+import scala.languageFeature.implicitConversions
+
 def lexFile(filePath: String): Option[ParserState] = {
   val fileName = filePath.split('/').last.split('.').head
   val fileContent = io.Source.fromFile(filePath)
@@ -42,6 +45,10 @@ def compile(filePath: String): Unit = {
     print(module.format(0))
 
     printSeparator()
+
+    new PrintWriter("C:\\Users\\nisse\\OneDrive\\Skrivbord\\Corn/TestCode.asm") { write(CodeGen.toString); close() }
+
+    printSeparator()
   } catch {
     case error: Error =>
       print(error.toString)
@@ -51,5 +58,5 @@ def compile(filePath: String): Unit = {
 }
 
 @main def main(): Unit = {
-  compile("C:/Users/nisse/OneDrive/Skrivbord/TestCode.txt")
+  compile("C:/Users/nisse/OneDrive/Skrivbord/Corn/TestCode.txt")
 }
