@@ -91,27 +91,21 @@ class UserGlobalFun(val module: Module, val name: String, retTypeExpr: Expr, exp
   override def generateCode: List[Instr] = {
     val ctx = new ExprCodeGenContext()
 
-    ctx.add(Asm.Sub(Reg.RSP, 8))
-
     params.values.foreach(ctx.add)
 
-    def iterateArgs(arg: AnalyzedPattern[LocalVar], argOffset: Int): Unit = arg match {
-      case AnalyzedVarPattern(patternVar, _) => patternVar.datatype.generateCopyCode(ctx, Reg.RSP + ctx.lookup(patternVar), Reg.RSP + argOffset)
-      case AnalyzedTuplePattern(elements, _) => elements.zip(Datatype.alignSequence(elements.map(_.datatype))._3).foreach(t => iterateArgs(t._1, argOffset + t._2))
+    def iterateArgs(arg: AnalyzedPattern[LocalVar], offset: Int): Unit = arg match {
+      case AnalyzedVarPattern(patternVar, _) => patternVar.datatype.generateCopyCode(ctx, Reg.RSP + ctx.lookup(patternVar), Reg.RBP + offset)
+      case AnalyzedTuplePattern(elements, _) => elements.zip(Datatype.alignSequence(elements.map(_.datatype))._3.map(_ + offset)).foreach(iterateArgs.tupled)
     }
 
-    args.zip(signature.argOffsets).foreach(t => iterateArgs(t._1, t._2 + 16))
+    args.accumulate(0) { case (arg, offset) =>
+      iterateArgs(arg, offset)
+      arg.datatype.size
+    }
 
     analyzedExpr.generateCode(ctx)
 
-    ctx.add(Load(Reg.RAX, Reg.RSP + (signature.argSize + 24)))
-
-    returnType.generateCopyCode(ctx, Address(Reg.RAX), Reg.RSP + (-returnType.size))
-
-    ctx.add(
-      Asm.Add(Reg.RSP, 8),
-      Ret()
-    )
+    ctx.add(Ret())
     ctx.code
   }
 }

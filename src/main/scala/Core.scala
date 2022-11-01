@@ -43,6 +43,16 @@ extension (int: Int) {
   def roundDown(powerOf2: Int): Int = if powerOf2 > 0 then math.floorDiv(int, powerOf2) * powerOf2 else int
 }
 
+extension[T, I <: IterableOnce[T]] (it: I) {
+  def accumulate[E](startValue: E)(f: (T, E) => E): E = {
+    var accumulator = startValue
+    for (element <- it) {
+      accumulator = f(element, accumulator)
+    }
+    accumulator
+  }
+}
+
 abstract class Error extends Exception {
   def errorType: String
   def range: FilePosRange

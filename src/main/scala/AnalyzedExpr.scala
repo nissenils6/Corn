@@ -72,84 +72,84 @@ abstract class AnalyzedExpr() {
   }
 
   def generateCode(ctx: ExprCodeGenContext): Unit = this match {
-    case AnalyzedCallExpr(function, args, _) => {
+    case AnalyzedCallExpr(function, args, _) =>
       val signature = function.returnType.asInstanceOf[FunDatatype]
 
-      ctx.offset = ctx.offset.roundDown(signature.returnType.align) - signature.returnType.size
-      val returnValueOffset = ctx.offset
-
-      ctx.offset = ctx.offset.roundDown(16)
-      val functionPtrOffset = ctx.offset
+      val argOffset = ctx.secondaryOffset
       function.generateCode(ctx)
+      ctx.secondaryOffset -= 8
+      ctx.add(
+        Load(Reg.RAX, Reg.RBP + ctx.secondaryOffset),
+        Store(Reg.RSP + (ctx.offset - 8), Reg.RAX)
+      )
 
-      ctx.offset = ctx.offset.roundDown(16)
+      ctx.offset -= 16
       args.foreach(_.generateCode(ctx))
-      ctx.offset = ctx.offset.roundDown(16)
+      ctx.offset += 16
 
       ctx.add(
-        Load(Reg.RAX, Reg.RSP + (functionPtrOffset - 8))
-      )
-      if (signature.returnType.size > 0) {
-        ctx.add(
-          Lea(Reg.RBX, Reg.RSP + returnValueOffset),
-          Store(Reg.RSP + (functionPtrOffset - 8), Reg.RBX)
-        )
-      }
-      ctx.add(
-        Asm.Sub(Reg.RSP, -ctx.offset),
+        Load(Reg.RAX, Reg.RSP + (ctx.offset - 8)),
+        Asm.Sub(Reg.RSP, -(ctx.offset - 8)),
+        Asm.Add(Reg.RBP, argOffset),
         IndRegCall(Reg.RAX),
-        Asm.Add(Reg.RSP, -ctx.offset)
+        Asm.Sub(Reg.RBP, argOffset),
+        Asm.Add(Reg.RSP, -(ctx.offset - 8))
       )
-      ctx.offset = returnValueOffset
-    }
-    case AnalyzedGlobalVarRefExpr(globalVar, range) => {
-      ctx.offset = ctx.offset.roundDown(globalVar.datatype.align) - globalVar.datatype.size
+      ctx.secondaryOffset = argOffset + signature.returnType.size.roundUp(8)
+    case AnalyzedGlobalVarRefExpr(globalVar, range) =>
+      val stackOffset = ctx.secondaryOffset
+      ctx.secondaryOffset += globalVar.datatype.size.roundUp(8)
       globalVar.label match {
-        case Some(label) => globalVar.datatype.generateCopyCode(ctx, Reg.RSP + ctx.offset, Address(label))
+        case Some(label) => globalVar.datatype.generateCopyCode(ctx, Reg.RBP + stackOffset, Address(label))
         case None => throw Error.unimplemented(range.file)
       }
-    }
-    case AnalyzedLocalVarRefExpr(localVar, _) => {
-      ctx.offset = ctx.offset.roundDown(localVar.datatype.align) - localVar.datatype.size
-      localVar.datatype.generateCopyCode(ctx, Reg.RSP + ctx.offset, Reg.RSP + ctx.lookup(localVar))
-    }
-    case AnalyzedGlobalFunRefExpr(globalFun, _) => {
-      ctx.offset = ctx.offset.roundDown(8) - 8
+    case AnalyzedLocalVarRefExpr(localVar, _) =>
+      val stackOffset = ctx.secondaryOffset
+      ctx.secondaryOffset += localVar.datatype.size.roundUp(8)
+      localVar.datatype.generateCopyCode(ctx, Reg.RBP + stackOffset, Reg.RSP + ctx.lookup(localVar))
+    case AnalyzedGlobalFunRefExpr(globalFun, _) =>
+      val stackOffset = ctx.secondaryOffset
+      ctx.secondaryOffset += 8
       ctx.add(
         Lea(Reg.RAX, Address(globalFun.label)),
-        Store(Reg.RSP + ctx.offset, Reg.RAX)
+        Store(Reg.RBP + stackOffset, Reg.RAX)
       )
-    }
-    case AnalyzedIntExpr(int, _) => {
-      ctx.offset = ctx.offset.roundDown(8) - 8
-      ctx.add(StoreImm(Reg.RSP + ctx.offset, int))
-    }
-    case AnalyzedTupleExpr(elements, _) => elements.foreach(_.generateCode(ctx))
+    case AnalyzedIntExpr(int, _) =>
+      val stackOffset = ctx.secondaryOffset
+      ctx.secondaryOffset += 8
+      ctx.add(StoreImm(Reg.RBP + stackOffset, int))
+    case AnalyzedTupleExpr(elements, _) =>
+      val stackOffset = ctx.secondaryOffset
+      val (tupleSize, _, tupleOffsets) = Datatype.alignSequence(elements.map(_.returnType))
+      ctx.secondaryOffset += tupleSize.roundUp(8)
+      val elementOffset = ctx.secondaryOffset
+      for ((expr, offset) <- elements.zip(tupleOffsets)) {
+        expr.generateCode(ctx)
+        expr.returnType.generateCopyCode(ctx, Reg.RBP + (stackOffset + offset), Reg.RBP + elementOffset)
+        ctx.secondaryOffset = elementOffset
+      }
     case AnalyzedBlockExpr(exprs, lastExpr, vars, _) => ctx.scope({
-      ctx.offset = ctx.offset.roundDown(lastExpr.returnType.align)
       val varOffset = ctx.offset
       vars.foreach(ctx.add)
+      ctx.offset = ctx.offset.roundDown(16)
       exprs.foreach(expr => {
         expr.generateCode(ctx)
-        ctx.offset += expr.returnType.size
+        ctx.secondaryOffset -= expr.returnType.size.roundUp(8)
       })
       lastExpr.generateCode(ctx)
-      ctx.offset = varOffset - lastExpr.returnType.size
-      if (vars.nonEmpty && vars.exists(_.datatype.size > 0)) {
-        lastExpr.returnType.generateCopyCode(ctx, Reg.RSP + ctx.offset, Address(Reg.RSP))
-      }
+      ctx.offset = varOffset
     })
     case AnalyzedUnitExpr(_) => ()
-    case AnalyzedLetExpr(pattern, expr, _) => {
+    case AnalyzedLetExpr(pattern, expr, _) =>
+      val stackOffset = ctx.secondaryOffset
       expr.generateCode(ctx)
 
       def iteratePattern(pattern: AnalyzedPattern[LocalVar], offset: Int): Unit = pattern match {
-        case AnalyzedVarPattern(patternVar, _) => patternVar.datatype.generateCopyCode(ctx, Reg.RSP + ctx.lookup(patternVar), Reg.RSP + offset)
-        case AnalyzedTuplePattern(elements, _) => elements.zip(Datatype.alignSequence(elements.map(_.datatype))._3).foreach(t => iteratePattern(t._1, offset + t._2))
+        case AnalyzedVarPattern(patternVar, _) => patternVar.datatype.generateCopyCode(ctx, Reg.RSP + ctx.lookup(patternVar), Reg.RBP + offset)
+        case AnalyzedTuplePattern(elements, _) => elements.zip(Datatype.alignSequence(elements.map(_.datatype))._3.map(_ + offset)).foreach(iteratePattern.tupled)
       }
 
-      iteratePattern(pattern, ctx.offset)
-    }
+      iteratePattern(pattern, stackOffset)
   }
 
   def format(indentation: Int): String = this match {
@@ -215,6 +215,8 @@ class ExprParsingContext(val module: Module, val fun: Option[UserGlobalFun]) {
     vars = newVars
     (value, varsToDrop)
   }
+
+  override def toString: String = vars.map(_.name).mkString(", ")
 }
 
 class ExprConstEvalContext {
@@ -238,7 +240,6 @@ class ExprConstEvalContext {
     value
   }
 
-
   def scope[T](f: => T): T = {
     val copy = vars.clone()
     val value = f
@@ -252,6 +253,7 @@ class ExprCodeGenContext {
   private val instructions = mutable.Buffer[Instr]()
 
   var offset = 0
+  var secondaryOffset = 0
 
   def lookup(localVar: LocalVar): Int = varOffsets(localVar)
 
@@ -266,7 +268,7 @@ class ExprCodeGenContext {
     case AnalyzedTuplePattern(elements, _) => elements.foreach(add)
   }
 
-  def add(instr: Instr): Unit = instructions.append(instr)
+  def add(instr: Instr): Unit = if instr.redundant then () else instructions.append(instr)
 
   def add(instr: Instr*): Unit = instr.foreach(add)
 
@@ -303,13 +305,13 @@ def analyzeExpr(ctx: ExprParsingContext)(expr: Expr): AnalyzedExpr = expr match 
       case Left(globalVar: GlobalVar) => AnalyzedGlobalVarRefExpr(globalVar, range)
       case Left(localVar: LocalVar) => AnalyzedLocalVarRefExpr(localVar, range)
     }
-    case None => throw Error.internal("", range)
+    case None => throw Error.internal(ctx.toString, range)
   }
   case IntExpr(int, range) => AnalyzedIntExpr(int, range)
   case TupleExpr(elements, range) => AnalyzedTupleExpr(elements.map(analyzeExpr(ctx)), range)
   case BlockExpr(exprs, lastExpr, range) => {
-    val (analyzedExprs, vars) = ctx.scope(exprs.map(analyzeExpr(ctx)))
-    AnalyzedBlockExpr(analyzedExprs, analyzeExpr(ctx)(lastExpr), vars, range)
+    val ((analyzedExprs, analyzedLastExpr), vars) = ctx.scope((exprs.map(analyzeExpr(ctx)), analyzeExpr(ctx)(lastExpr)))
+    AnalyzedBlockExpr(analyzedExprs, analyzedLastExpr, vars, range)
   }
   case UnitExpr(range) => AnalyzedUnitExpr(range)
   case LetExpr(pattern, expr, range) =>

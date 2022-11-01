@@ -5,20 +5,27 @@ abstract class Instr {
   def label: Option[String]
   def comment: Option[String]
 
+  def redundant: Boolean = this match {
+    case AsmImm(Asm.Add | Asm.Sub | Asm.Or | Asm.Xor, _, 0, _, _) => true
+    case AsmMemImm(Asm.Add | Asm.Sub | Asm.Or | Asm.Xor, _, 0, _, _) => true
+    case Mov(dst, src, _, _) => dst == src
+    case _ => false
+  }
+
   def format: (String, String) = this match {
     case AsmReg(op, dst, src, _, _) => (op.name, s"$dst, $src")
-    case AsmImm(op, dst, imm, _, _) => (op.name, s"$dst, ${imm}")
+    case AsmImm(op, dst, imm, _, _) => (op.name, s"$dst, $imm")
     case AsmAddress(op, dst, src, _, _) => (op.name, s"$dst, $src")
     case AsmMem(op, dst, src, _, _) => (op.name, s"$dst, $src")
-    case AsmMemImm(op, dst, imm, _, _) => (op.name, s"$dst, ${imm}")
+    case AsmMemImm(op, dst, imm, _, _) => (op.name, s"$dst, $imm")
     case Neg(reg, _, _) => ("neg", s"$reg")
     case Imul(dst, src, _, _) => ("imul", s"$dst, $src")
     case Idiv(dst, _, _) => ("idiv", s"$dst")
     case Mov(dst, src, _, _) => ("mov", s"$dst, $src")
     case Load(dst, address, regSize, _, _) => ("mov", s"${dst(regSize)}, $address")
-    case LoadImm(dst, imm, regSize, _, _) => ("mov", s"${dst(regSize)}, ${imm}")
+    case LoadImm(dst, imm, regSize, _, _) => ("mov", s"${dst(regSize)}, $imm")
     case Store(address, src, regSize, _, _) => ("mov", s"$regSize$address, ${src(regSize)}")
-    case StoreImm(address, imm, regSize, _, _) => ("mov", s"$regSize$address, ${imm}")
+    case StoreImm(address, imm, regSize, _, _) => ("mov", s"$regSize$address, $imm")
     case Lea(dst, address, _, _) => ("lea", s"$dst, $address")
     case DirJump(target, _, _) => ("jmp", s"$target")
     case DirCondJump(target, flag, _, _) => (flag.jumpName, s"$target")

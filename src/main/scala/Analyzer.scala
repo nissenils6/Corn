@@ -11,8 +11,8 @@ def analyzeFile(stmts: List[GlobalStmt], file: File): Module = {
   module.addFun(new BuiltinGlobalFun(module, "+", List(IntDatatype, IntDatatype), IntDatatype,
     args => Some(ConstInt(args.head.toInt + args(1).toInt)),
     () => List(
-      Load(Reg.RAX, Reg.RSP + 16),
-      Asm.Add(Reg.RSP + 24, Reg.RAX),
+      Load(Reg.RAX, Reg.RBP + 8),
+      Asm.Add(Address(Reg.RBP), Reg.RAX),
       Ret()
     )
   ))
@@ -20,8 +20,8 @@ def analyzeFile(stmts: List[GlobalStmt], file: File): Module = {
   module.addFun(new BuiltinGlobalFun(module, "-", List(IntDatatype, IntDatatype), IntDatatype,
     args => Some(ConstInt(args.head.toInt - args(1).toInt)),
     () => List(
-      Load(Reg.RAX, Reg.RSP + 16),
-      Asm.Sub(Reg.RSP + 24, Reg.RAX),
+      Load(Reg.RAX, Reg.RBP + 8),
+      Asm.Sub(Address(Reg.RBP), Reg.RAX),
       Ret()
     )
   ))
@@ -29,10 +29,10 @@ def analyzeFile(stmts: List[GlobalStmt], file: File): Module = {
   module.addFun(new BuiltinGlobalFun(module, "*", List(IntDatatype, IntDatatype), IntDatatype,
     args => Some(ConstInt(args.head.toInt * args(1).toInt)),
     () => List(
-      Load(Reg.RAX, Reg.RSP + 24),
-      Load(Reg.RCX, Reg.RSP + 16),
+      Load(Reg.RAX, Address(Reg.RBP)),
+      Load(Reg.RCX, Reg.RBP + 8),
       Imul(Reg.RAX, Reg.RCX),
-      Store(Reg.RSP + 16, Reg.RAX),
+      Store(Address(Reg.RBP), Reg.RAX),
       Ret()
     )
   ))
@@ -40,11 +40,11 @@ def analyzeFile(stmts: List[GlobalStmt], file: File): Module = {
   module.addFun(new BuiltinGlobalFun(module, "/", List(IntDatatype, IntDatatype), IntDatatype,
     args => Some(ConstInt(args.head.toInt / args(1).toInt)),
     () => List(
-      Load(Reg.RAX, Reg.RSP + 24),
-      Load(Reg.RCX, Reg.RSP + 16),
+      Load(Reg.RAX, Address(Reg.RBP)),
+      Load(Reg.RCX, Reg.RBP + 8),
       Asm.Xor(Reg.RDX, Reg.RDX),
       Idiv(Reg.RCX),
-      Store(Reg.RSP + 16, Reg.RAX),
+      Store(Address(Reg.RBP), Reg.RAX),
       Ret()
     )
   ))
@@ -52,11 +52,11 @@ def analyzeFile(stmts: List[GlobalStmt], file: File): Module = {
   module.addFun(new BuiltinGlobalFun(module, "%", List(IntDatatype, IntDatatype), IntDatatype,
     args => Some(ConstInt(args.head.toInt % args(1).toInt)),
     () => List(
-      Load(Reg.RAX, Reg.RSP + 24),
-      Load(Reg.RCX, Reg.RSP + 16),
+      Load(Reg.RAX, Address(Reg.RBP)),
+      Load(Reg.RCX, Reg.RBP + 8),
       Asm.Xor(Reg.RDX, Reg.RDX),
       Idiv(Reg.RCX),
-      Store(Reg.RSP + 16, Reg.RDX),
+      Store(Address(Reg.RBP), Reg.RDX),
       Ret()
     )
   ))
@@ -73,7 +73,7 @@ def analyzeFile(stmts: List[GlobalStmt], file: File): Module = {
       CodeGen.windowsFunction("GetStdHandle")
 
       List(
-        Load(Reg.RAX, Reg.RSP + 16),
+        Load(Reg.RAX, Address(Reg.RBP)),
         Lea(Reg.RBX, Address(bufferEndLabel)),
         Asm.Sub(Reg.RBX, 1),
         StoreImm(Address(Reg.RBX), 10, RegSize.Byte),
@@ -133,10 +133,12 @@ def analyzeFile(stmts: List[GlobalStmt], file: File): Module = {
   module.varInits.foreach(_.typeCheck())
   module.funTables.foreach(_._2.funs.foreach(_.typeCheck()))
 
+  val (secondaryStack, _) = CodeGen.bss(1024 * 256, 16)
+
   CodeGen.main(
-    Asm.Sub(Reg.RSP, 8),
+    Lea(Reg.RBP, Address(secondaryStack)),
     DirCall(module.funTables("main").funs.head.label),
-    Asm.Sub(Reg.RSP, 48),
+    Asm.Sub(Reg.RSP, 56),
     Asm.Xor(Reg.RCX, Reg.RCX),
     IndCall(Address(CodeGen.windowsFunction("ExitProcess")))
   )
