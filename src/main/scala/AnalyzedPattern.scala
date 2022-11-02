@@ -16,19 +16,40 @@ case class AnalyzedVarPattern[T <: AnalyzerVar](patternVar: T, range: FilePosRan
 
 case class AnalyzedTuplePattern[T <: AnalyzerVar](elements: List[AnalyzedPattern[T]], range: FilePosRange) extends AnalyzedPattern[T]
 
-def mapPattern[T <: AnalyzerVar](varConstructor: (String, ConstVal => ConstVal, Expr, FilePosRange) => T, pattern: Pattern): AnalyzedPattern[T] = {
-  def tupleNav(index: Int)(constVal: ConstVal): ConstVal = constVal.asInstanceOf[ConstTuple].elements(index)
+abstract class PatternNav {
+  def const(constVal: ConstVal): ConstVal = this match {
+    case VarPatternNav => constVal
+    case TuplePatternNav(index, next) => next.const(constVal.asInstanceOf[ConstTuple].elements(index))
+  }
+}
 
-  def rec(pattern: Pattern, patternNav: Option[ConstVal => ConstVal]): AnalyzedPattern[T] = pattern match {
-    case VarPattern(name, datatype, range) =>
-      val variable = varConstructor(name, patternNav.getOrElse(constVal => constVal), datatype, range)
-      AnalyzedVarPattern[T](variable, range)
+case object VarPatternNav extends PatternNav
+
+case class TuplePatternNav(index: Int, next: PatternNav) extends PatternNav
+
+def mapPattern[T <: AnalyzerVar](varConstructor: (VarPattern, PatternNav) => T, pattern: Pattern): (AnalyzedPattern[T], List[T]) = {
+  def rec(pattern: Pattern, patternNav: PatternNav): (AnalyzedPattern[T], List[T]) = pattern match {
+    case varPattern: VarPattern =>
+      val variable = varConstructor(varPattern, patternNav)
+      (AnalyzedVarPattern[T](variable, varPattern.range), List(variable))
     case TuplePattern(elements, range) =>
-      AnalyzedTuplePattern[T](elements.zipWithIndex.map((pattern, index) => rec(pattern, Some(patternNav match {
-        case Some(f) => f andThen tupleNav(index)
-        case None => tupleNav(index)
-      }))), range)
+      val (analyzedPatterns, vars) = elements.zipWithIndex.map((pattern, index) => rec(pattern, TuplePatternNav(index, patternNav))).unzip
+      (AnalyzedTuplePattern[T](analyzedPatterns, range), vars.flatten)
   }
 
-  rec(pattern, None)
+  rec(pattern, VarPatternNav)
+}
+
+def mapPatterns[T <: AnalyzerVar](varConstructor: (VarPattern, PatternNav) => T, patterns: List[Pattern]): (List[AnalyzedPattern[T]], List[T]) = {
+  val (analyzedPatterns, vars) = patterns.map(p => mapPattern(varConstructor, p)).unzip
+  (analyzedPatterns, vars.flatten)
+}
+
+def verifyPatterns[T <: AnalyzerVar](vars: List[T]): Map[String, T] = {
+  vars.groupBy(_.name).map{case (name, vars) => (name, vars.head)}
+}
+
+def mapAndVerify[T <: AnalyzerVar](varConstructor: (VarPattern, PatternNav) => T, patterns: List[Pattern]): (List[AnalyzedPattern[T]], Map[String, T]) = {
+  val (a, b) = mapPatterns(varConstructor, patterns)
+  (a, verifyPatterns(b))
 }

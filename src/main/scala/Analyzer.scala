@@ -2,31 +2,26 @@ import Asm.Xor
 
 import scala.collection.mutable
 
-def analyzeFile(stmts: List[GlobalStmt], file: File): Module = {
-  val module: Module = new Module(file)
-
-  module.addVar(new BuiltinGlobalVar(module, "Int", ConstType(IntDatatype)))
-  module.addVar(new BuiltinGlobalVar(module, "Type", ConstType(TypeDatatype)))
-
-  module.addFun(new BuiltinGlobalFun(module, "+", List(IntDatatype, IntDatatype), IntDatatype,
+def builtinVars(module: => Module): List[GlobalVar] = List(
+  new BuiltinGlobalVar(module, "Int", ConstType(IntDatatype)),
+  new BuiltinGlobalVar(module, "Type", ConstType(TypeDatatype)),
+  new BuiltinGlobalVar(module, "+", ConstFunction(new BuiltinFun(module, List(IntDatatype, IntDatatype), IntDatatype,
     args => Some(ConstInt(args.head.toInt + args(1).toInt)),
     () => List(
       Load(Reg.RAX, Reg.RBP + 8),
       Asm.Add(Address(Reg.RBP), Reg.RAX),
       Ret()
     )
-  ))
-
-  module.addFun(new BuiltinGlobalFun(module, "-", List(IntDatatype, IntDatatype), IntDatatype,
+  ))),
+  new BuiltinGlobalVar(module, "-", ConstFunction(new BuiltinFun(module, List(IntDatatype, IntDatatype), IntDatatype,
     args => Some(ConstInt(args.head.toInt - args(1).toInt)),
     () => List(
       Load(Reg.RAX, Reg.RBP + 8),
       Asm.Sub(Address(Reg.RBP), Reg.RAX),
       Ret()
     )
-  ))
-
-  module.addFun(new BuiltinGlobalFun(module, "*", List(IntDatatype, IntDatatype), IntDatatype,
+  ))),
+  new BuiltinGlobalVar(module, "*", ConstFunction(new BuiltinFun(module, List(IntDatatype, IntDatatype), IntDatatype,
     args => Some(ConstInt(args.head.toInt * args(1).toInt)),
     () => List(
       Load(Reg.RAX, Address(Reg.RBP)),
@@ -35,9 +30,8 @@ def analyzeFile(stmts: List[GlobalStmt], file: File): Module = {
       Store(Address(Reg.RBP), Reg.RAX),
       Ret()
     )
-  ))
-
-  module.addFun(new BuiltinGlobalFun(module, "/", List(IntDatatype, IntDatatype), IntDatatype,
+  ))),
+  new BuiltinGlobalVar(module, "/", ConstFunction(new BuiltinFun(module, List(IntDatatype, IntDatatype), IntDatatype,
     args => Some(ConstInt(args.head.toInt / args(1).toInt)),
     () => List(
       Load(Reg.RAX, Address(Reg.RBP)),
@@ -47,9 +41,8 @@ def analyzeFile(stmts: List[GlobalStmt], file: File): Module = {
       Store(Address(Reg.RBP), Reg.RAX),
       Ret()
     )
-  ))
-
-  module.addFun(new BuiltinGlobalFun(module, "%", List(IntDatatype, IntDatatype), IntDatatype,
+  ))),
+  new BuiltinGlobalVar(module, "%", ConstFunction(new BuiltinFun(module, List(IntDatatype, IntDatatype), IntDatatype,
     args => Some(ConstInt(args.head.toInt % args(1).toInt)),
     () => List(
       Load(Reg.RAX, Address(Reg.RBP)),
@@ -59,16 +52,15 @@ def analyzeFile(stmts: List[GlobalStmt], file: File): Module = {
       Store(Address(Reg.RBP), Reg.RDX),
       Ret()
     )
-  ))
-
-  module.addFun(new BuiltinGlobalFun(module, "println", List(IntDatatype), UnitDatatype,
+  ))),
+  new BuiltinGlobalVar(module, "println", ConstFunction(new BuiltinFun(module, List(IntDatatype), UnitDatatype,
     args => None,
     () => {
       val noNegLabel = CodeGen.label()
       val loopLabel = CodeGen.label()
       val noMinusLabel = CodeGen.label()
 
-      val (bufferLabel, bufferEndLabel) = CodeGen.bss(32)
+      val (_, bufferEndLabel) = CodeGen.bss(32)
       CodeGen.windowsFunction("WriteFile")
       CodeGen.windowsFunction("GetStdHandle")
 
@@ -112,32 +104,27 @@ def analyzeFile(stmts: List[GlobalStmt], file: File): Module = {
         Ret()
       )
     }
-  ))
+  )))
+)
 
-  for (stmt <- stmts) stmt match {
-    case FunGlobalStmt(name, parameters, returnType, expr, range) =>
-      val fun = module.addFun(UserGlobalFun(module, name, returnType, expr, range))
-      fun.args = parameters.map(param => mapPattern((name, const, typeExpr, range) => {
-        if (fun.params.contains(name)) throw Error.duplicate("parameter", name, range, fun.params(name).range)
-        val localVar = new LocalVar(fun.module, name, typeExpr, range)
-        fun.params(name) = localVar
-        localVar
-      }, param))
-    case LetGlobalStmt(pattern, expr, _) =>
-      var init: UserGlobalVarInit = null
-      val mappedPattern = mapPattern((name, const, typeExpr, range) => module.addVar(new UserGlobalVar(module, name, init, const, typeExpr, range)), pattern)
-      init = new UserGlobalVarInit(module, expr, mappedPattern)
-      module.varInits.append(init)
-  }
+def analyzeFile(stmts: List[GlobalStmt], file: File): Module = {
+  lazy val module: Module = new Module(file, {
+    val (analyzedPatterns, vars) = (for (stmt <- stmts) yield {
+      lazy val (analyzedPattern: AnalyzedPattern[UserGlobalVar], vars: List[UserGlobalVar]) = mapPattern((pattern, patternNav) => new UserGlobalVar(module, pattern.name, init, patternNav, pattern.datatype, pattern.range), stmt.pattern)
+      lazy val init = new UserGlobalVarInit(module, stmt.expr, analyzedPattern)
+      (analyzedPattern, vars)
+    }).unzip
+    val vars2 = verifyPatterns(vars.flatten.asInstanceOf[List[GlobalVar]] ::: builtinVars(module))
+    (vars2, analyzedPatterns, stmts.map(_.expr))
+  })
 
   module.varInits.foreach(_.typeCheck())
-  module.funTables.foreach(_._2.funs.foreach(_.typeCheck()))
 
   val (secondaryStack, _) = CodeGen.bss(1024 * 256, 16)
 
   CodeGen.main(
     Lea(Reg.RBP, Address(secondaryStack)),
-    DirCall(module.funTables("main").funs.head.label),
+    DirCall(module.vars("main").constVal.get.asInstanceOf[ConstFunction].function.label),
     Asm.Sub(Reg.RSP, 56),
     Asm.Xor(Reg.RCX, Reg.RCX),
     IndCall(Address(CodeGen.windowsFunction("ExitProcess")))

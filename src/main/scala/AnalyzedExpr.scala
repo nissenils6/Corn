@@ -9,12 +9,14 @@ abstract class AnalyzedExpr() {
     case AnalyzedCallExpr(function, _, _) => function.returnType.asInstanceOf[FunDatatype].returnType
     case AnalyzedGlobalVarRefExpr(globalVar, _) => globalVar.datatype
     case AnalyzedLocalVarRefExpr(localVar, _) => localVar.datatype
-    case AnalyzedGlobalFunRefExpr(globalFun, _) => FunDatatype(globalFun.argTypes, globalFun.returnType)
+    case AnalyzedGlobalFunRefExpr(globalFun, _) => globalFun.signature
     case AnalyzedIntExpr(_, _) => IntDatatype
     case AnalyzedTupleExpr(elements, _) => TupleDatatype(elements.map(_.returnType))
     case AnalyzedBlockExpr(_, lastExpr, _, _) => lastExpr.returnType
     case AnalyzedUnitExpr(_) => UnitDatatype
     case AnalyzedLetExpr(_, expr, _) => expr.returnType
+    case AnalyzedFunExpr(fun, _) => fun.signature
+    case AnalyzedFunTypeExpr(_, _, _) => TypeDatatype
   }
 
   lazy val constVal: Option[ConstVal] = this match {
@@ -30,6 +32,8 @@ abstract class AnalyzedExpr() {
     case AnalyzedBlockExpr(_, _, _, _) => constEval(ExprConstEvalContext())
     case AnalyzedUnitExpr(_) => Some(ConstUnit)
     case AnalyzedLetExpr(_, expr, _) => expr.constVal
+    case AnalyzedFunExpr(fun, _) => Some(ConstFunction(fun))
+    case AnalyzedFunTypeExpr(parameters, returnType, _) => Some(ConstType(FunDatatype(parameters.map(_.constDatatype), returnType.constDatatype)))
   }
 
   private def mapToConstDatatype(constVal: Option[ConstVal], range: FilePosRange): Datatype = constVal match {
@@ -51,6 +55,8 @@ abstract class AnalyzedExpr() {
     case AnalyzedBlockExpr(_, _, _, range) => mapToConstDatatype(constEval(ExprConstEvalContext()), range)
     case AnalyzedUnitExpr(_) => UnitDatatype
     case AnalyzedLetExpr(_, expr, range) => mapToConstDatatype(expr.constVal, range)
+    case AnalyzedFunExpr(fun, _) => throw Error.datatypeExpected(fun.signature, range)
+    case AnalyzedFunTypeExpr(parameters, returnType, _) => FunDatatype(parameters.map(_.constDatatype), returnType.constDatatype)
   }
 
   def constEval(ctx: ExprConstEvalContext): Option[ConstVal] = this match {
@@ -69,6 +75,8 @@ abstract class AnalyzedExpr() {
     })
     case AnalyzedUnitExpr(_) => Some(ConstUnit)
     case AnalyzedLetExpr(pattern, expr, _) => expr.constEval(ctx).map(value => ctx.add(pattern, value))
+    case AnalyzedFunExpr(fun, _) => Some(ConstFunction(fun))
+    case AnalyzedFunTypeExpr(parameters, returnType, _) => Some(ConstType(FunDatatype(parameters.map(_.constDatatype), returnType.constDatatype)))
   }
 
   def generateCode(ctx: ExprCodeGenContext): Unit = this match {
@@ -108,16 +116,14 @@ abstract class AnalyzedExpr() {
       ctx.secondaryOffset += localVar.datatype.size.roundUp(8)
       localVar.datatype.generateCopyCode(ctx, Reg.RBP + stackOffset, Reg.RSP + ctx.lookup(localVar))
     case AnalyzedGlobalFunRefExpr(globalFun, _) =>
-      val stackOffset = ctx.secondaryOffset
-      ctx.secondaryOffset += 8
       ctx.add(
         Lea(Reg.RAX, Address(globalFun.label)),
-        Store(Reg.RBP + stackOffset, Reg.RAX)
+        Store(Reg.RBP + ctx.secondaryOffset, Reg.RAX)
       )
-    case AnalyzedIntExpr(int, _) =>
-      val stackOffset = ctx.secondaryOffset
       ctx.secondaryOffset += 8
-      ctx.add(StoreImm(Reg.RBP + stackOffset, int))
+    case AnalyzedIntExpr(int, _) =>
+      ctx.add(StoreImm(Reg.RBP + ctx.secondaryOffset, int))
+      ctx.secondaryOffset += 8
     case AnalyzedTupleExpr(elements, _) =>
       val stackOffset = ctx.secondaryOffset
       val (tupleSize, _, tupleOffsets) = Datatype.alignSequence(elements.map(_.returnType))
@@ -150,18 +156,27 @@ abstract class AnalyzedExpr() {
       }
 
       iteratePattern(pattern, stackOffset)
+    case AnalyzedFunExpr(fun, _) =>
+      ctx.add(
+        Lea(Reg.RAX, Address(fun.label)),
+        Store(Reg.RBP + ctx.secondaryOffset, Reg.RAX)
+      )
+      ctx.secondaryOffset += 8
+    case AnalyzedFunTypeExpr(_, _, range) => Error.internal("", range)
   }
 
   def format(indentation: Int): String = this match {
     case AnalyzedCallExpr(function, args, _) => s"${function.format(indentation)}(${args.map(_.format(indentation)).mkString(", ")})"
     case AnalyzedGlobalVarRefExpr(globalVar, _) => s"${globalVar.name}"
     case AnalyzedLocalVarRefExpr(localVar, _) => s"${localVar.name}"
-    case AnalyzedGlobalFunRefExpr(globalFun, _) => s"${globalFun.name}"
+    case AnalyzedGlobalFunRefExpr(globalFun, _) => s"LOL"
     case AnalyzedIntExpr(int, _) => s"$int"
     case AnalyzedTupleExpr(elements, _) => s"(${elements.map(_.format(indentation)).mkString(", ")})"
     case AnalyzedBlockExpr(exprs, lastExpr, _, _) => s"{\n${exprs.map(e => s"${" " * (indentation + 1)}${e.format(indentation + 1)};\n").mkString}${" " * (indentation + 1)}${lastExpr.format(indentation + 1)}\n${" " * indentation}}"
     case AnalyzedUnitExpr(_) => s"()"
     case AnalyzedLetExpr(pattern, expr, _) => s"let ${pattern.format(indentation)} = ${expr.format(indentation)}"
+    case AnalyzedFunExpr(fun, _) => s"${fun.format(indentation)}"
+    case AnalyzedFunTypeExpr(parameters, returnType, _) => s"(${parameters.map(_.format(indentation)).mkString(", ")}) => ${returnType.format(indentation)}"
   }
 }
 
@@ -171,7 +186,7 @@ case class AnalyzedGlobalVarRefExpr(globalVar: GlobalVar, range: FilePosRange) e
 
 case class AnalyzedLocalVarRefExpr(localVar: LocalVar, range: FilePosRange) extends AnalyzedExpr
 
-case class AnalyzedGlobalFunRefExpr(globalFun: GlobalFun, range: FilePosRange) extends AnalyzedExpr
+case class AnalyzedGlobalFunRefExpr(globalFun: Fun, range: FilePosRange) extends AnalyzedExpr
 
 case class AnalyzedIntExpr(int: Int, range: FilePosRange) extends AnalyzedExpr
 
@@ -183,19 +198,23 @@ case class AnalyzedUnitExpr(range: FilePosRange) extends AnalyzedExpr
 
 case class AnalyzedLetExpr(pattern: AnalyzedPattern[LocalVar], expr: AnalyzedExpr, range: FilePosRange) extends AnalyzedExpr
 
+case class AnalyzedFunExpr(fun: Fun, range: FilePosRange) extends AnalyzedExpr
+
+case class AnalyzedFunTypeExpr(parameters: List[AnalyzedExpr], returnTypeExpr: AnalyzedExpr, range: FilePosRange) extends AnalyzedExpr
+
 class LocalVar(val module: Module, val name: String, typeExpr: Expr, val range: FilePosRange) extends AnalyzerVar {
   lazy val datatype: Datatype = analyzeExpr(ExprParsingContext(module, None))(typeExpr).constDatatype
 }
 
-class ExprParsingContext(val module: Module, val fun: Option[UserGlobalFun]) {
+class ExprParsingContext(val module: Module, val fun: Option[UserFun]) {
   private var vars = List[LocalVar]()
 
-  def lookup(name: String): Option[Either[AnalyzerVar, GlobalFunTable]] = {
+  def lookup(name: String): Option[AnalyzerVar] = {
     @tailrec
-    def rec(list: List[AnalyzerVar]): Option[Either[AnalyzerVar, GlobalFunTable]] = if (list.isEmpty) {
-      fun.flatMap(_.params.get(name)).orElse(module.vars.get(name)).map(v => Left(v)).orElse(module.funTables.get(name).map(t => Right(t)))
+    def rec(list: List[AnalyzerVar]): Option[AnalyzerVar] = if (list.isEmpty) {
+      fun.flatMap(_.params.get(name)).orElse(module.vars.get(name))
     } else if (list.head.name == name) {
-      Some(Left(list.head))
+      Some(list.head)
     } else {
       rec(list.tail)
     }
@@ -203,10 +222,12 @@ class ExprParsingContext(val module: Module, val fun: Option[UserGlobalFun]) {
     rec(vars)
   }
 
-  def add(analyzerVar: LocalVar): LocalVar = {
-    vars = analyzerVar :: vars
-    analyzerVar
+  def add(localVar: LocalVar): LocalVar = {
+    vars = localVar :: vars
+    localVar
   }
+
+  def add(localVars: List[LocalVar]): Unit = localVars.foreach(add)
 
   def scope[T](f: => T): (T, List[LocalVar]) = {
     val length = vars.length
@@ -301,9 +322,8 @@ def analyzeExpr(ctx: ExprParsingContext)(expr: Expr): AnalyzedExpr = expr match 
     }
   case RefExpr(iden, range) => ctx.lookup(iden) match {
     case Some(v) => v match {
-      case Right(globalFunTable: GlobalFunTable) => AnalyzedGlobalFunRefExpr(globalFunTable.funs.head, range)
-      case Left(globalVar: GlobalVar) => AnalyzedGlobalVarRefExpr(globalVar, range)
-      case Left(localVar: LocalVar) => AnalyzedLocalVarRefExpr(localVar, range)
+      case globalVar: GlobalVar => AnalyzedGlobalVarRefExpr(globalVar, range)
+      case localVar: LocalVar => AnalyzedLocalVarRefExpr(localVar, range)
     }
     case None => throw Error.internal(ctx.toString, range)
   }
@@ -316,12 +336,10 @@ def analyzeExpr(ctx: ExprParsingContext)(expr: Expr): AnalyzedExpr = expr match 
   case UnitExpr(range) => AnalyzedUnitExpr(range)
   case LetExpr(pattern, expr, range) =>
     val analyzedExpr = analyzeExpr(ctx)(expr)
-    val analyzedPattern = mapPattern((name, patternNav, typeExpr, range) => {
-      val localVar = new LocalVar(ctx.module, name, typeExpr, range)
-      ctx.add(localVar)
-      localVar
-    }, pattern)
+    val (analyzedPattern, vars) = mapPattern((pattern, _) => new LocalVar(ctx.module, pattern.name, pattern.datatype, pattern.range), pattern)
     if (analyzedPattern.datatype != analyzedExpr.returnType) throw Error.assignTypeMismatch(analyzedExpr.returnType, analyzedPattern.datatype, analyzedExpr.range, analyzedPattern.range)
+    ctx.add(vars)
     AnalyzedLetExpr(analyzedPattern, analyzedExpr, range)
-
+  case FunExpr(parameters, returnType, expr, range) => AnalyzedFunExpr(new UserFun(ctx.module, "", parameters, returnType, expr, range), range)
+  case FunTypeExpr(parameters, returnType, range) => AnalyzedFunTypeExpr(parameters.map(analyzeExpr(ctx)), analyzeExpr(ctx)(returnType), range)
 }

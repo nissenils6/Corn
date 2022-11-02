@@ -86,7 +86,7 @@ abstract class ConstVal {
     case ConstInt(int) => s"$int"
     case ConstType(datatype) => s"$datatype"
     case ConstTuple(elements) => s"(${elements.mkString(", ")})"
-    case ConstFunction(function) => s"${function.name}"
+    case ConstFunction(function) => s"<FUNCTION>"
   }
 }
 
@@ -98,4 +98,4 @@ case class ConstType(valDatatype: Datatype) extends ConstVal
 
 case class ConstTuple(elements: List[ConstVal]) extends ConstVal
 
-case class ConstFunction(function: GlobalFun) extends ConstVal
+case class ConstFunction(function: Fun) extends ConstVal

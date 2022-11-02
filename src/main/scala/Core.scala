@@ -86,10 +86,10 @@ object Error {
     SimpleError(LEXICAL, message, range)
 
   def unexpected(token: Token, expected: String): Error =
-    SimpleError(SYNTAX, s"Unexpected token '$token', expected $expected", token.range)
+    SimpleError(SYNTAX, s"Unexpected token '$token', expected '$expected'", token.range)
 
   def unexpected(expected: String, file: File): Error =
-    SimpleError(SYNTAX, s"Unexpected end of file, expected $expected", file.lastRange)
+    SimpleError(SYNTAX, s"Unexpected end of file, expected '$expected'", file.lastRange)
 
   def semantic(message: String, range: FilePosRange): Error =
     SimpleError(SEMANTIC, message, range)
