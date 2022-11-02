@@ -36,7 +36,7 @@ abstract class Datatype {
     case IntDatatype => s"Int"
     case TypeDatatype => s"Type"
     case TupleDatatype(elements) => s"(${elements.mkString(", ")})"
-    case FunDatatype(params, returnType) => s"(${params.mkString(", ")}) => $returnType"
+    case FunDatatype(params, returnType) => s"((${params.mkString(", ")}) => $returnType)"
   }
 }
 

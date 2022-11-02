@@ -25,7 +25,7 @@ abstract class AnalyzedExpr() {
       argValues <- args.map(_.constVal).extract
     } yield fun.asInstanceOf[ConstFunction].function.constEval(argValues)).flatten
     case AnalyzedGlobalVarRefExpr(globalVar, _) => globalVar.constVal
-    case AnalyzedLocalVarRefExpr(_, range) => throw Error.internal(s"Attempt at compile time evaluating a local variable reference expression outside of a expression evaluation context", range)
+    case AnalyzedLocalVarRefExpr(_, range) => throw Error.todo(s"Attempt at compile time evaluating a local variable reference expression outside of a expression evaluation context", range)
     case AnalyzedGlobalFunRefExpr(globalFun, _) => Some(ConstFunction(globalFun))
     case AnalyzedIntExpr(int, _) => Some(ConstInt(int))
     case AnalyzedTupleExpr(elements, _) => elements.map(_.constVal).extract.map(vals => ConstTuple(vals))
@@ -48,7 +48,7 @@ abstract class AnalyzedExpr() {
       argValues <- args.map(_.constVal).extract
     } yield fun.asInstanceOf[ConstFunction].function.constEval(argValues)).flatten, range)
     case AnalyzedGlobalVarRefExpr(globalVar, range) => mapToConstDatatype(globalVar.constVal, range)
-    case AnalyzedLocalVarRefExpr(_, _) => throw Error.internal(s"Attempt at compile time evaluating a local variable reference expression outside of a expression evaluation context", range)
+    case AnalyzedLocalVarRefExpr(_, _) => throw Error.todo(s"Attempt at compile time evaluating a local variable reference expression outside of a expression evaluation context", range)
     case AnalyzedGlobalFunRefExpr(globalFun, range) => throw Error.datatypeExpected(globalFun.signature, range)
     case AnalyzedIntExpr(_, range) => throw Error.datatypeExpected(IntDatatype, range)
     case AnalyzedTupleExpr(elements, _) => TupleDatatype(elements.map(_.constDatatype))
@@ -109,7 +109,7 @@ abstract class AnalyzedExpr() {
       ctx.secondaryOffset += globalVar.datatype.size.roundUp(8)
       globalVar.label match {
         case Some(label) => globalVar.datatype.generateCopyCode(ctx, Reg.RBP + stackOffset, Address(label))
-        case None => throw Error.unimplemented(range.file)
+        case None => throw Error.todo(range)
       }
     case AnalyzedLocalVarRefExpr(localVar, _) =>
       val stackOffset = ctx.secondaryOffset
@@ -162,7 +162,7 @@ abstract class AnalyzedExpr() {
         Store(Reg.RBP + ctx.secondaryOffset, Reg.RAX)
       )
       ctx.secondaryOffset += 8
-    case AnalyzedFunTypeExpr(_, _, range) => Error.internal("", range)
+    case AnalyzedFunTypeExpr(_, _, range) => Error.todo("", range)
   }
 
   def format(indentation: Int): String = this match {
@@ -202,8 +202,11 @@ case class AnalyzedFunExpr(fun: Fun, range: FilePosRange) extends AnalyzedExpr
 
 case class AnalyzedFunTypeExpr(parameters: List[AnalyzedExpr], returnTypeExpr: AnalyzedExpr, range: FilePosRange) extends AnalyzedExpr
 
-class LocalVar(val module: Module, val name: String, typeExpr: Expr, val range: FilePosRange) extends AnalyzerVar {
-  lazy val datatype: Datatype = analyzeExpr(ExprParsingContext(module, None))(typeExpr).constDatatype
+class LocalVar(val module: Module, val name: String, letExpr: => Option[AnalyzedLetExpr], patternNav: PatternNav, typeExpr: Option[Expr], val range: FilePosRange) extends AnalyzerVar {
+  lazy val datatype: Datatype = typeExpr.map(typeExpr =>  analyzeExpr(ExprParsingContext(module, None))(typeExpr).constDatatype).getOrElse(patternNav.datatype(letExpr match {
+    case Some(letExpr) => letExpr.expr.returnType
+    case None => throw Error.todo(module.file)
+  }))
 }
 
 class ExprParsingContext(val module: Module, val fun: Option[UserFun]) {
@@ -244,7 +247,7 @@ class ExprConstEvalContext {
   private var vars = mutable.Map[LocalVar, ConstVal]()
 
   def lookup(localVar: LocalVar): ConstVal = {
-    if (!vars.contains(localVar)) throw Error.internal(s"Failed compile time code execution: local variable not initialized", localVar.range)
+    if (!vars.contains(localVar)) throw Error.todo(s"Failed compile time code execution: local variable not initialized", localVar.range)
     vars(localVar)
   }
 
@@ -311,11 +314,11 @@ def analyzeExpr(ctx: ExprParsingContext)(expr: Expr): AnalyzedExpr = expr match 
     analyzedFunExpr.returnType match {
       case FunDatatype(params, returnType) =>
         if (params.length != posArgs.length) {
-          throw Error.unimplemented(range.file)
+          throw Error.todo(range.file)
         }
         val analyzedArgs = posArgs.map(analyzeExpr(ctx))
         if (!params.zip(analyzedArgs.map(_.returnType)).forall(t => t._1 == t._2)) {
-          throw Error.internal("", range)
+          throw Error.todo(range)
         }
         AnalyzedCallExpr(analyzedFunExpr, analyzedArgs, range)
       case datatype => throw Error.semantic(s"Datatype '$datatype' is not callable", function.range)
@@ -325,7 +328,7 @@ def analyzeExpr(ctx: ExprParsingContext)(expr: Expr): AnalyzedExpr = expr match 
       case globalVar: GlobalVar => AnalyzedGlobalVarRefExpr(globalVar, range)
       case localVar: LocalVar => AnalyzedLocalVarRefExpr(localVar, range)
     }
-    case None => throw Error.internal(ctx.toString, range)
+    case None => throw Error.todo(ctx.toString, range)
   }
   case IntExpr(int, range) => AnalyzedIntExpr(int, range)
   case TupleExpr(elements, range) => AnalyzedTupleExpr(elements.map(analyzeExpr(ctx)), range)
@@ -335,11 +338,12 @@ def analyzeExpr(ctx: ExprParsingContext)(expr: Expr): AnalyzedExpr = expr match 
   }
   case UnitExpr(range) => AnalyzedUnitExpr(range)
   case LetExpr(pattern, expr, range) =>
-    val analyzedExpr = analyzeExpr(ctx)(expr)
-    val (analyzedPattern, vars) = mapPattern((pattern, _) => new LocalVar(ctx.module, pattern.name, pattern.datatype, pattern.range), pattern)
-    if (analyzedPattern.datatype != analyzedExpr.returnType) throw Error.assignTypeMismatch(analyzedExpr.returnType, analyzedPattern.datatype, analyzedExpr.range, analyzedPattern.range)
+    lazy val analyzedExpr = analyzeExpr(ctx)(expr)
+    lazy val (analyzedPattern: AnalyzedPattern[LocalVar], vars: List[LocalVar]) = AnalyzedPattern.map((pattern, patternNav) => new LocalVar(ctx.module, pattern.name, Some(letExpr), patternNav, pattern.datatype, pattern.range), pattern)
+    if (analyzedPattern.datatype != analyzedExpr.returnType) throw Error.typeMismatch(analyzedExpr.returnType, analyzedPattern.datatype, analyzedExpr.range, analyzedPattern.range)
+    lazy val letExpr = AnalyzedLetExpr(analyzedPattern, analyzedExpr, range)
     ctx.add(vars)
-    AnalyzedLetExpr(analyzedPattern, analyzedExpr, range)
+    letExpr
   case FunExpr(parameters, returnType, expr, range) => AnalyzedFunExpr(new UserFun(ctx.module, "", parameters, returnType, expr, range), range)
   case FunTypeExpr(parameters, returnType, range) => AnalyzedFunTypeExpr(parameters.map(analyzeExpr(ctx)), analyzeExpr(ctx)(returnType), range)
 }

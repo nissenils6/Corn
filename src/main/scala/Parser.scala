@@ -1,12 +1,6 @@
 import scala.annotation.tailrec
 
 case class ParserState(tokens: List[Token], file: File) {
-  def expectKeyword(keyword: String): ParserState = tokens match {
-    case KeywordToken(key, _) :: rest if key == keyword => this withTokens rest
-    case token :: _ => throw Error.unexpected(token, keyword)
-    case _ => throw Error.unexpected(keyword, file)
-  }
-
   def expectSymbol(symbol: String): ParserState = tokens match {
     case SymbolToken(sym, _) :: rest if sym == symbol => this withTokens rest
     case token :: _ => throw Error.unexpected(token, symbol)
@@ -29,7 +23,7 @@ abstract class Expr {
     case UnitExpr(_) => "()"
     case DotExpr(expr, iden, _) => s"${expr.format(indentation)}.$iden"
     case LetExpr(pattern, expr, _) => s"let ${pattern.format(indentation)} = ${expr.format(indentation)}"
-    case FunExpr(parameters, returnType, expr, _) => s"fun(${parameters.map(_.format(indentation)).mkString(", ")}): ${returnType.format(indentation)} => ${expr.format(indentation)}"
+    case FunExpr(parameters, returnType, expr, _) => s"fn(${parameters.map(_.format(indentation)).mkString(", ")})${returnType.map(returnType => s": ${returnType.format(indentation)}").getOrElse("")} => ${expr.format(indentation)}"
     case FunTypeExpr(parameters, returnType, _) => s"(${parameters.map(_.format(indentation))}) => ${returnType.format(indentation)}"
   }
 }
@@ -50,7 +44,7 @@ case class DotExpr(expr: Expr, iden: String, range: FilePosRange) extends Expr
 
 case class LetExpr(pattern: Pattern, expr: Expr, range: FilePosRange) extends Expr
 
-case class FunExpr(parameters: List[Pattern], returnType: Expr, expr: Expr, range: FilePosRange) extends Expr
+case class FunExpr(parameters: List[Pattern], returnType: Option[Expr], expr: Expr, range: FilePosRange) extends Expr
 
 case class FunTypeExpr(parameters: List[Expr], returnType: Expr, range: FilePosRange) extends Expr
 
@@ -58,12 +52,12 @@ abstract class Pattern {
   def range: FilePosRange
 
   def format(indentation: Int): String = this match {
-    case VarPattern(name, dataType, _) => s"$name: ${dataType.format(indentation)}"
-    case TuplePattern(elements, _) => s"(${elements.mkString(", ")})"
+    case VarPattern(name, datatype, _) => s"$name${datatype.map(datatype => s": ${datatype.format(indentation)}").getOrElse("")}"
+    case TuplePattern(elements, _) => s"(${elements.map(_.format(indentation)).mkString(", ")})"
   }
 }
 
-case class VarPattern(name: String, datatype: Expr, range: FilePosRange) extends Pattern
+case class VarPattern(name: String, datatype: Option[Expr], range: FilePosRange) extends Pattern
 
 case class TuplePattern(elements: List[Pattern], range: FilePosRange) extends Pattern
 
@@ -112,15 +106,15 @@ private def parseStmt(state: ParserState): (Expr, ParserState) = state.tokens ma
 }
 
 private def parseExpr(precedence: Int, allowFunTypeLiterals: Boolean)(state: ParserState): (Expr, ParserState) = state.tokens match {
-  case IdenToken(iden, range) :: rest => parseExpr(precedence)(RefExpr(iden, range), state withTokens rest)
-  case IntToken(int, range) :: rest => parseExpr(precedence)(IntExpr(int, range), state withTokens rest)
+  case IdenToken(iden, range) :: rest => parseExpr(precedence, allowFunTypeLiterals)(RefExpr(iden, range), state withTokens rest)
+  case IntToken(int, range) :: rest => parseExpr(precedence, allowFunTypeLiterals)(IntExpr(int, range), state withTokens rest)
   case SymbolToken("(", startRange) :: exprTokens =>
     val (exprs, newState, endRange) = parseSep(state withTokens exprTokens, parseExpr(0, true), ",", ")", "expression")
     newState.tokens match {
       case SymbolToken("=>", _) :: returnTypeTokens if allowFunTypeLiterals =>
         val (returnTypeExpr, lastState) = parseExpr(0, true)(newState withTokens returnTypeTokens)
         (FunTypeExpr(exprs, returnTypeExpr, startRange to returnTypeExpr.range), lastState)
-      case _ => parseExpr(precedence)(exprs match {
+      case _ => parseExpr(precedence, allowFunTypeLiterals)(exprs match {
         case List() => UnitExpr(startRange to endRange)
         case List(expr) => expr
         case exprList => TupleExpr(exprList, startRange to endRange)
@@ -130,47 +124,58 @@ private def parseExpr(precedence: Int, allowFunTypeLiterals: Boolean)(state: Par
     val (body, newState, endRange) = parseSep(state withTokens exprTokens, parseStmt, ";", "}", "expression")
     val lastExpr = body.lastOption.getOrElse(UnitExpr(endRange))
     val exprs = body.dropRight(1)
-    parseExpr(precedence)(BlockExpr(exprs, lastExpr, startRange to endRange), newState)
+    parseExpr(precedence, allowFunTypeLiterals)(BlockExpr(exprs, lastExpr, startRange to endRange), newState)
   case KeywordToken("let", startRange) :: patternTokens =>
     val (pattern, newState) = parsePattern(state withTokens patternTokens)
     val (expr, lastState) = parseExpr(0, true)(newState.expectSymbol("="))
     (LetExpr(pattern, expr, startRange to expr.range), lastState)
-  case KeywordToken("fun", startRange) :: SymbolToken("(", _) :: parameterTokens =>
+  case KeywordToken("fn", startRange) :: SymbolToken("(", _) :: parameterTokens =>
     val (parameters, newState, _) = parseSep(state withTokens parameterTokens, parsePattern, ",", ")", "pattern")
-    val (returnType, exprState) = parseExpr(0, false)(newState.expectSymbol(":"))
-    val (expr, lastState) = parseExpr(0, true)(exprState.expectSymbol("=>"))
-    (FunExpr(parameters, returnType, expr, startRange to expr.range), lastState)
+    newState.tokens match {
+      case SymbolToken(":", _) :: retTypeTokens =>
+        val (returnType, exprState) = parseExpr(0, false)(newState withTokens retTypeTokens)
+        val (expr, lastState) = parseExpr(0, true)(exprState.expectSymbol("=>"))
+        (FunExpr(parameters, Some(returnType), expr, startRange to expr.range), lastState)
+      case _ =>
+        val (expr, lastState) = parseExpr(0, true)(newState.expectSymbol("=>"))
+        (FunExpr(parameters, None, expr, startRange to expr.range), lastState)
+    }
+
   case token :: _ => throw Error.unexpected(token, "expression")
   case _ => throw Error.unexpected("expression", state.file)
 }
 
 @tailrec
-private def parseExpr(precedence: Int)(expr: Expr, state: ParserState): (Expr, ParserState) = state.tokens match {
+private def parseExpr(precedence: Int, allowFunTypeLiterals: Boolean)(expr: Expr, state: ParserState): (Expr, ParserState) = state.tokens match {
   case SymbolToken(".", _) :: IdenToken(op, opRange) :: SymbolToken("(", _) :: argumentTokens =>
     val (exprs, newState, endRange) = parseSep(state withTokens argumentTokens, parseArgument, ",", ")", "expression")
     val posArgs = exprs.filter(_._1.isEmpty).map(_._2)
     val keywordArgs = exprs.filter(_._1.nonEmpty).map(t => (t._1.get, t._2))
-    parseExpr(precedence)(CallExpr(RefExpr(op, opRange), expr :: posArgs, keywordArgs, expr.range to endRange), newState)
-  case SymbolToken(".", _) :: IdenToken(iden, idenRange) :: rest => parseExpr(precedence)(DotExpr(expr, iden, expr.range to idenRange), state withTokens rest)
+    parseExpr(precedence, allowFunTypeLiterals)(CallExpr(RefExpr(op, opRange), expr :: posArgs, keywordArgs, expr.range to endRange), newState)
+  case SymbolToken(".", _) :: IdenToken(iden, idenRange) :: rest => parseExpr(precedence, allowFunTypeLiterals)(DotExpr(expr, iden, expr.range to idenRange), state withTokens rest)
   case (idenToken: IdenToken) :: rightExprTokens if idenToken.precedence > precedence =>
     val (rightExpr, rest) = parseExpr(idenToken.precedence, true)(state withTokens rightExprTokens)
-    parseExpr(precedence)(CallExpr(RefExpr(idenToken.iden, idenToken.range), List(expr, rightExpr), List(), expr.range to rightExpr.range), rest)
+    parseExpr(precedence, allowFunTypeLiterals)(CallExpr(RefExpr(idenToken.iden, idenToken.range), List(expr, rightExpr), List(), expr.range to rightExpr.range), rest)
   case SymbolToken("(", _) :: argumentTokens =>
     val (exprs, newState, endRange) = parseSep(state withTokens argumentTokens, parseArgument, ",", ")", "expression")
     val posArgs = exprs.filter(_._1.isEmpty).map(_._2)
     val keywordArgs = exprs.filter(_._1.nonEmpty).map(t => (t._1.get, t._2))
-    parseExpr(precedence)(CallExpr(expr, posArgs, keywordArgs, expr.range to endRange), newState)
+    parseExpr(precedence, allowFunTypeLiterals)(CallExpr(expr, posArgs, keywordArgs, expr.range to endRange), newState)
+  case SymbolToken("=>", _) :: returnTypeTokens if allowFunTypeLiterals =>
+    val (returnTypeExpr, lastState) = parseExpr(0, true)(state withTokens returnTypeTokens)
+    (FunTypeExpr(List(expr), returnTypeExpr, expr.range to returnTypeExpr.range), lastState)
   case _ => (expr, state)
 }
 
 private def parsePattern(state: ParserState): (Pattern, ParserState) = state.tokens match {
   case IdenToken(name, nameRange) :: SymbolToken(":", _) :: rest =>
     val (expr, newState) = parseExpr(0, true)(state withTokens rest)
-    (VarPattern(name, expr, nameRange to expr.range), newState)
+    (VarPattern(name, Some(expr), nameRange to expr.range), newState)
+  case IdenToken(name, nameRange) :: rest =>
+    (VarPattern(name, None, nameRange), state withTokens rest)
   case SymbolToken("(", startRange) :: rest =>
     val (patterns, newState, endRange) = parseSep(state withTokens rest, parsePattern, ",", ")", "pattern")
     (TuplePattern(patterns, startRange to endRange), newState)
-  case IdenToken(_, _) :: token :: _ => throw Error.unexpected(token, "':'")
   case token :: _ => throw Error.unexpected(token, "pattern")
   case _ => throw Error.unexpected("pattern", state.file)
 }

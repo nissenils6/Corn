@@ -54,7 +54,7 @@ def builtinVars(module: => Module): List[GlobalVar] = List(
     )
   ))),
   new BuiltinGlobalVar(module, "println", ConstFunction(new BuiltinFun(module, List(IntDatatype), UnitDatatype,
-    args => None,
+    _ => None,
     () => {
       val noNegLabel = CodeGen.label()
       val loopLabel = CodeGen.label()
@@ -110,12 +110,15 @@ def builtinVars(module: => Module): List[GlobalVar] = List(
 def analyzeFile(stmts: List[GlobalStmt], file: File): Module = {
   lazy val module: Module = new Module(file, {
     val (analyzedPatterns, vars) = (for (stmt <- stmts) yield {
-      lazy val (analyzedPattern: AnalyzedPattern[UserGlobalVar], vars: List[UserGlobalVar]) = mapPattern((pattern, patternNav) => new UserGlobalVar(module, pattern.name, init, patternNav, pattern.datatype, pattern.range), stmt.pattern)
+      lazy val (analyzedPattern: AnalyzedPattern[UserGlobalVar], vars: List[UserGlobalVar]) = AnalyzedPattern.map((pattern, patternNav) => new UserGlobalVar(module, pattern.name, init, patternNav, pattern.datatype, pattern.range), stmt.pattern)
       lazy val init = new UserGlobalVarInit(module, stmt.expr, analyzedPattern)
       (analyzedPattern, vars)
     }).unzip
-    val vars2 = verifyPatterns(vars.flatten.asInstanceOf[List[GlobalVar]] ::: builtinVars(module))
-    (vars2, analyzedPatterns, stmts.map(_.expr))
+
+    (
+      AnalyzedPattern.verify(vars.flatten.asInstanceOf[List[GlobalVar]] ::: builtinVars(module)),
+      analyzedPatterns.zip(stmts.map(_.expr)).map { case (analyzedPattern, expr) => new UserGlobalVarInit(module, expr, analyzedPattern) }
+    )
   })
 
   module.varInits.foreach(_.typeCheck())

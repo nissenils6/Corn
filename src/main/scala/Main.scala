@@ -1,21 +1,14 @@
 import java.io.PrintWriter
 import scala.languageFeature.implicitConversions
 
-def lexFile(filePath: String): Option[ParserState] = {
+def lexFile(filePath: String): ParserState = {
   val fileName = filePath.split('/').last.split('.').head
   val fileContent = io.Source.fromFile(filePath)
   val source = fileContent.getLines().mkString("\n")
   val file = File(fileName, source)
-  val filePos = FilePos(0, file)
-  val tokens = tokenize.eval(LexerState(source.toList, filePos))
-  val errors = tokens.filter(_.isLeft)
-  if (errors.nonEmpty) {
-    println()
-    println(errors.map(_.swap.map(_.toString).getOrElse("")).mkString("\n"))
-    None
-  } else {
-    Some(ParserState(tokens.map(token => token.getOrElse(null)), file))
-  }
+  val (errors, tokens) = tokenize.eval(LexerState(source.toList, FilePos(0, file))).partitionMap(identity)
+  if (errors.nonEmpty) throw Error(Error.LEXICAL, errors.head.range.file, errors)
+  ParserState(tokens, file)
 }
 
 def parseFile(parserState: ParserState): List[GlobalStmt] = parseGlobalStmts(List(), parserState)._1.reverse
@@ -27,33 +20,31 @@ def compile(filePath: String): Unit = {
     println()
   }
 
-  try for {
-    parserState <- lexFile(filePath)
-  } {
+  try {
+    val parserState = lexFile(filePath)
+
     printSeparator()
 
     println(parserState.tokens.mkString(" "))
 
-    printSeparator()
-
     val parsedFile = parseFile(parserState)
+    printSeparator()
     println(parsedFile.mkString("\n\n"))
 
-    printSeparator()
-
     val module = analyzeFile(parsedFile, parserState.file)
+    printSeparator()
     print(module.format(0))
 
     printSeparator()
 
-    new PrintWriter("C:\\Users\\nisse\\OneDrive\\Skrivbord\\Corn/TestCode.asm") { write(CodeGen.toString); close() }
-
-    printSeparator()
+    new PrintWriter("C:\\Users\\nisse\\OneDrive\\Skrivbord\\Corn\\TestCode.asm") {
+      write(CodeGen.toString);
+      close()
+    }
   } catch {
-    case error: Error =>
-      print(error.toString)
+    case error: (Error | ErrorGroup) =>
       printSeparator()
-      error.printStackTrace()
+      print(error)
   }
 }
 

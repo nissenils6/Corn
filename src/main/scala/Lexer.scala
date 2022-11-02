@@ -1,6 +1,6 @@
 import scala.annotation.{targetName, unused}
 
-type LexerResult = Either[Error, Token]
+type LexerResult = Either[ErrorComponent, Token]
 
 extension (result: LexerResult) {
   def isIgnored = result match {
@@ -68,10 +68,9 @@ private val escapedChars = Map('t' -> '\t', 'b' -> '\b', 'n' -> '\n', 'r' -> '\r
 private val escapedCharsInverted = escapedChars.map(_.swap)
 private val symbols = Set(":", "::", "...", "=>", "=")
 private val specialSymbols = "()[]{}.,;".toSet
-private val keywords = Set("let", "fun")
-private val nextChar = State[LexerState, (Char, FilePos)](state =>
-  ((state.chars.head, state.pos), LexerState(state.chars.tail, state.pos + 1))
-)
+private val keywords = Set("let", "fn")
+
+private val nextChar = State[LexerState, (Char, FilePos)](state => ((state.chars.head, state.pos), LexerState(state.chars.tail, state.pos + 1)))
 
 private val nextCharOption = State[LexerState, Option[(Char, FilePos)]] {
   case LexerState(List(), filePos) => (None, LexerState(List(), filePos))
@@ -92,10 +91,10 @@ private val nextElement: State[LexerState, LexerResult] = nextChar.flatMap {
     if (chars._1.length == 1) {
       Right(CharToken(chars._1.head, chars._2))
     } else {
-      Left(Error.lexical("Character literals must be exactly one character long", posStart until quote.get._2))
+      Left(ErrorComponent(posStart until quote.get._2, Some("Character literals must be exactly one character long")))
     }
   } else {
-    Left(Error.lexical("Unexpected end of file while parsing character literal", posStart until chars._2))
+    Left(ErrorComponent(posStart until chars._2, Some("Unexpected end of file while parsing character literal")))
   }
   case ('"', posStart) => for {
     chars <- nextString('"')
@@ -103,7 +102,7 @@ private val nextElement: State[LexerState, LexerResult] = nextChar.flatMap {
   } yield if (terminator.nonEmpty && terminator.get._1 == '"') {
     Right(StringToken(chars._1.mkString, chars._2))
   } else {
-    Left(Error.lexical("Unexpected end of file while parsing string literal", posStart until chars._2))
+    Left(ErrorComponent(posStart until chars._2, Some("Unexpected end of file while parsing string literal")))
   }
   case c if isWhitespace(c._1) => next(isWhitespace, c).map(string => Right(WhitespaceToken(string._1, c._2 until string._2)))
   case c if isIdenStart(c._1) => next(isIden, c).flatMap {
@@ -118,12 +117,12 @@ private val nextElement: State[LexerState, LexerResult] = nextChar.flatMap {
   case c if isNumberStart(c._1) => next(isNumber, c).map(string => string._1.count(_ == '.') match {
     case 0 => Right(IntToken(string._1.toInt, string._2))
     case 1 => Right(FloatToken(string._1.toFloat, string._2))
-    case _ => Left(Error.lexical(s"Floating point literals cannot contain multiple decimal points", string._2))
+    case _ => Left(ErrorComponent(string._2, Some("Floating point literals cannot contain multiple decimal points")))
   })
-  case c => next(isUnsupported, c).map(string => Left(Error.lexical(s"Unsupported string of characters", string._2)))
+  case c => next(isUnsupported, c).map(string => Left(ErrorComponent(string._2, Some("Unsupported string of characters"))))
 }
 
-def escapeChar(char: Char): Char = escapedChars(char)
+def escapeChar(char: Char): Char = escapedChars.getOrElse(char, char)
 def unescapeChar(char: Char): String = if (escapedCharsInverted.contains(char)) {
   "\\" + escapedCharsInverted(char)
 } else {

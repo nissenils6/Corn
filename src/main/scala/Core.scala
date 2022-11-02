@@ -53,27 +53,16 @@ extension[T, I <: IterableOnce[T]] (it: I) {
   }
 }
 
-abstract class Error extends Exception {
-  def errorType: String
-  def range: FilePosRange
-  def format: String
-  override def toString = s"$errorType error in '${range.file.name}' at $range: $format"
+case class ErrorComponent(range: FilePosRange, message: Option[String] = None) {
+  override def toString: String = range.underline('-', message)
 }
 
-case class SimpleError(errorType: String, message: String, range: FilePosRange) extends Error {
-  override def format: String = s"$message:\n\n${range.underline}\n"
+case class Error(errorType: String, file: File, components: List[ErrorComponent], message: Option[String] = None) extends Exception {
+  override def toString: String = s"$errorType error in '${file.name}':${message.map(message => s" $message:").getOrElse("")}\n\n${components.mkString("\n\n")}\n\n"
 }
 
-case class DuplicateError(elementType: String, name: String, range: FilePosRange, alreadyDefinedRange: FilePosRange) extends Error {
-  override def errorType: String = Error.SEMANTIC
-
-  override def format: String = s"Duplicate $elementType '$name':\n\n${range.underline}\n\n'$name' is already defined here:\n\n${alreadyDefinedRange.underline}\n"
-}
-
-case class AssignTypeMismatchError(datatype: Datatype, expectedDatatype: Datatype, range: FilePosRange, patternRange: FilePosRange) extends Error {
-  override def errorType: String = Error.SEMANTIC
-
-  override def format: String = s"Type mismatch in let statement, return type of the expression is '$datatype':\n\n${range.underline}\n\nThe pattern expected value of type '$expectedDatatype':\n\n${patternRange.underline}\n"
+case class ErrorGroup(errors: List[Error]) extends Exception {
+  override def toString: String = errors.mkString("\n")
 }
 
 object Error {
@@ -82,35 +71,35 @@ object Error {
   val SEMANTIC = "Semantic"
   val INTERNAL = "Internal"
 
-  def lexical(message: String, range: FilePosRange): Error =
-    SimpleError(LEXICAL, message, range)
-
   def unexpected(token: Token, expected: String): Error =
-    SimpleError(SYNTAX, s"Unexpected token '$token', expected '$expected'", token.range)
+    Error(SYNTAX, token.range.file, List(ErrorComponent(token.range, Some(s"Unexpected token '$token', expected '$expected'"))))
 
   def unexpected(expected: String, file: File): Error =
-    SimpleError(SYNTAX, s"Unexpected end of file, expected '$expected'", file.lastRange)
+    Error(SYNTAX, file, List(ErrorComponent(file.lastRange, Some(s"Unexpected end of file, expected '$expected'"))))
 
   def semantic(message: String, range: FilePosRange): Error =
-    SimpleError(SEMANTIC, message, range)
+    Error(SEMANTIC, range.file, List(ErrorComponent(range, Some(message))))
 
-  def duplicate(elementType: String, name: String, range: FilePosRange, alreadyDefinedRange: FilePosRange): Error =
-    DuplicateError(elementType, name, range, alreadyDefinedRange)
-
-  def assignTypeMismatch(datatype: Datatype, expectedDatatype: Datatype, range: FilePosRange, patternRange: FilePosRange): Error =
-    AssignTypeMismatchError(datatype, expectedDatatype, range, patternRange)
+  def typeMismatch(datatype: Datatype, expectedDatatype: Datatype, range: FilePosRange, patternRange: FilePosRange): Error =
+    Error(SEMANTIC, range.file, List(
+      ErrorComponent(patternRange, Some(s"'$expectedDatatype' expected")),
+      ErrorComponent(range, Some(s"'$datatype' provided"))
+    ), Some("Type mismatch"))
 
   def datatypeExpected(found: Datatype, range: FilePosRange): Error =
-    SimpleError(SEMANTIC, s"Expression expected to compile-time evaluate to 'Type', found '$found'", range)
+    Error(SEMANTIC, range.file, List(ErrorComponent(range, Some(s"Expression expected to compile-time evaluate to 'Type', found '$found'"))))
 
   def datatypeExpected(range: FilePosRange): Error =
-    SimpleError(SEMANTIC, s"Expression expected to compile-time evaluate to 'Type'", range)
+    Error(SEMANTIC, range.file, List(ErrorComponent(range, Some(s"Expression expected to compile-time evaluate to 'Type'"))))
 
-  def internal(message: String, range: FilePosRange): Error =
-    SimpleError(INTERNAL, message, range)
+  def todo(file: File): Error =
+    Error(INTERNAL, file, List())
 
-  def unimplemented(file: File): Error =
-    SimpleError(INTERNAL, s"Error message not implemented", file.lastRange)
+  def todo(range: FilePosRange): Error =
+    Error(INTERNAL, range.file, List(ErrorComponent(range)))
+
+  def todo(message: String, range: FilePosRange): Error =
+    Error(INTERNAL, range.file, List(ErrorComponent(range, Some(message))))
 }
 
 case class File(name: String, source: String) {
@@ -149,23 +138,30 @@ case class FilePosRange(start: Int, end: Int, file: File) {
 
   override def toString: String = s"$start..$end"
 
-  def underline: String = {
-    var lineNum = file.newlines.lastIndexWhere(_ < start) + 1
-    val lineNumSpace = math.log10((file.newlines.indexWhere(_ >= end) match {
+  def underline(underlineChar: Char, message: Option[String] = None): String = {
+    val startLine = file.newlines.lastIndexWhere(_ < start)
+    val endLine = file.newlines.indexWhere(_ >= end) match {
       case -1 => file.newlines.length
       case num => num
-    }) + 2).ceil.toInt + 2
-    val lineStart = file.newlines.findLast(_ < start).getOrElse(0)
-    val lineEnd = file.newlines.find(_ >= end).getOrElse(file.source.length)
+    }
 
-    val (code, under) = file.source.substring(lineStart, lineEnd).zipWithIndex.flatMap {
+    val startIndex = file.newlines.findLast(_ < start).getOrElse(0)
+    val endIndex = file.newlines.find(_ >= end).getOrElse(file.source.length)
+
+    var lineNum = startLine + 1
+    val lineNumSpace = math.log10((endLine) + 2).ceil.toInt + 2
+
+    val (code, under) = file.source.substring(startIndex, endIndex).zipWithIndex.flatMap {
       case ('\n', _) => ('\n', '\n') :: (s"${lineNum += 1; lineNum}:".padTo(lineNumSpace, ' ') + "| ").toList.zip((" " * lineNumSpace + "| ").toList)
-      case ('\t', index) if start until end contains (lineStart + index) => List.fill(4)((' ', '^'))
-      case (char, index) if start until end contains (lineStart + index) => List((char, '^'))
+      case ('\t', index) if start until end contains (startIndex + index) => List.fill(4)((' ', underlineChar))
+      case (char, index) if start until end contains (startIndex + index) => List((char, underlineChar))
       case ('\t', _) => List.fill(4)((' ', ' '))
       case (char, _) => List((char, ' '))
     }.unzip
 
-    code.mkString.split("\n+").zip(under.mkString.split("\n+")).filter(t => t._1.length + t._2.length > 0).map(t => s"${t._1}\n${t._2}").mkString("\n")
+    val string = code.mkString.split("\n+").zip(under.mkString.split("\n+")).filter(t => t._1.length + t._2.length > 0).map(t => s"${t._1}\n${t._2}").mkString("\n")
+
+    val indentation = " " * lineNumSpace + "| " + (if startLine == endLine - 1 then " " * (start - startIndex - 1 + file.source.substring(startIndex, start).count(_ == '\t') * 3) else "")
+    s"$string${message.map(_.split('\n')).getOrElse(Array[String]()).map(msgLine => s"\n$indentation$msgLine").mkString}"
   }
 }

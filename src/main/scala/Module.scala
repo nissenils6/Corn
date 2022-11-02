@@ -24,8 +24,8 @@ class BuiltinGlobalVar(module: => Module, val name: String, value: ConstVal) ext
   def format(indentation: Int): String = s"${" " * indentation}builtin $name: $datatype = $value"
 }
 
-class UserGlobalVar(module: => Module, val name: String, init: => UserGlobalVarInit, patternNav: PatternNav, typeExpr: Expr, val range: FilePosRange) extends GlobalVar {
-  lazy val datatype: Datatype = analyzeExpr(ExprParsingContext(module, None))(typeExpr).constDatatype
+class UserGlobalVar(module: => Module, val name: String, init: => UserGlobalVarInit, patternNav: PatternNav, typeExpr: Option[Expr], val range: FilePosRange) extends GlobalVar {
+  lazy val datatype: Datatype = typeExpr.map(typeExpr => analyzeExpr(ExprParsingContext(module, None))(typeExpr).constDatatype).getOrElse(patternNav.datatype(init.analyzedExpr.returnType))
   lazy val constVal: Option[ConstVal] = init.analyzedExpr.constVal.map(patternNav.const)
 }
 
@@ -34,10 +34,10 @@ class UserGlobalVarInit(module: => Module, expr: Expr, pattern: => AnalyzedPatte
   lazy val analyzedPattern: AnalyzedPattern[UserGlobalVar] = pattern
 
   def typeCheck(): Unit = {
-    if (analyzedPattern.datatype != analyzedExpr.returnType) throw Error.assignTypeMismatch(analyzedExpr.returnType, analyzedPattern.datatype, analyzedExpr.range, analyzedPattern.range)
+    if (analyzedPattern.datatype != analyzedExpr.returnType) throw Error.typeMismatch(analyzedExpr.returnType, analyzedPattern.datatype, analyzedExpr.range, analyzedPattern.range)
   }
 
-  def format(indentation: Int): String = s"${" " * indentation}${pattern.format(indentation)} = ${analyzedExpr.format(indentation)}${analyzedExpr.constVal.map(value => s"    [CONST: ${value.toString}]").getOrElse("")}"
+  def format(indentation: Int): String = s"${analyzedExpr.constVal.map(value => s"${" " * indentation}[CONST: ${value.toString}]\n").getOrElse("")}${" " * indentation}${pattern.format(indentation)} = ${analyzedExpr.format(indentation)};"
 }
 
 abstract class Fun {
@@ -67,25 +67,20 @@ class BuiltinFun(val module: Module, val argTypes: List[Datatype], val returnTyp
   override def generateCode: List[Instr] = generateFunction()
 }
 
-class UserFun(val module: Module, val name: String, val parameters: List[Pattern], retTypeExpr: Expr, expr: Expr, val range: FilePosRange) extends Fun {
-  //  val params: mutable.Map[String, LocalVar] = mutable.Map()
-  //  lazy val args: List[AnalyzedPattern[LocalVar]] = parameters.map(param => mapPattern((name, _, typeExpr, range) => {
-  //    if (params.contains(name)) throw Error.duplicate("parameter", name, range, params(name).range)
-  //    val localVar = new LocalVar(module, name, typeExpr, range)
-  //    params(name) = localVar
-  //    localVar
-  //  }, param))
-
-  lazy val (args: List[AnalyzedPattern[LocalVar]], params: Map[String, LocalVar]) = mapAndVerify((pattern, _) => new LocalVar(module, pattern.name, pattern.datatype, pattern.range), parameters)
+class UserFun(val module: Module, val name: String, parameters: List[Pattern], retTypeExpr: Option[Expr], expr: Expr, val range: FilePosRange) extends Fun {
+  lazy val (args: List[AnalyzedPattern[LocalVar]], params: Map[String, LocalVar]) = {
+    val (args, params) = parameters.map(parameter => AnalyzedPattern.map((pattern, patternNav) => new LocalVar(module, pattern.name, None, patternNav, pattern.datatype, pattern.range), parameter)).unzip
+    (args, AnalyzedPattern.verify(params.flatten))
+  }
 
   lazy val analyzedExpr: AnalyzedExpr = analyzeExpr(new ExprParsingContext(module, Some(this)))(expr)
 
   lazy val argTypes: List[Datatype] = args.map(_.datatype)
-  lazy val returnType: Datatype = analyzeExpr(new ExprParsingContext(module, None))(retTypeExpr).constDatatype
+  lazy val returnType: Datatype = retTypeExpr.map(retTypeExpr => analyzeExpr(new ExprParsingContext(module, None))(retTypeExpr).constDatatype).getOrElse(analyzedExpr.returnType)
 
-  override def format(indentation: Int): String = s"fun(${args.map(_.format(indentation)).mkString(", ")}): $returnType => ${analyzedExpr.format(indentation)}"
+  override def format(indentation: Int): String = s"fn(${args.map(_.format(indentation)).mkString(", ")}): $returnType => ${analyzedExpr.format(indentation)}"
 
-  override def typeCheck(): Unit = if (returnType != analyzedExpr.returnType) throw Error.unimplemented(module.file)
+  override def typeCheck(): Unit = if (returnType != analyzedExpr.returnType) throw Error.todo(module.file)
 
   override def constEval(arguments: List[ConstVal]): Option[ConstVal] = {
     val ctx = new ExprConstEvalContext()
@@ -105,7 +100,7 @@ class UserFun(val module: Module, val name: String, val parameters: List[Pattern
 
     args.accumulate(0) { case (arg, offset) =>
       iterateArgs(arg, offset)
-      arg.datatype.size
+      offset + arg.datatype.size
     }
 
     analyzedExpr.generateCode(ctx)
@@ -115,20 +110,8 @@ class UserFun(val module: Module, val name: String, val parameters: List[Pattern
   }
 }
 
-class Module(val file: File, fileContent: => (Map[String, GlobalVar], List[AnalyzedPattern[UserGlobalVar]], List[Expr])) {
-  lazy val (vars, varInits) = {
-    val (vars, varInits, exprs) = fileContent
-    (vars, varInits.zip(exprs).map { case (analyzedPattern, expr) => new UserGlobalVarInit(this, expr, analyzedPattern) })
-    //    val groupedVars = vars.groupBy(_.name)
-    //    val a = (groupedVars.filter(_._2.length > 1) match {
-    //      case erroneousVars if erroneousVars.nonEmpty =>
-    //        val (name, firstErrorGroup) = erroneousVars.head
-    //        val List(first, second) = firstErrorGroup.take(2)
-    //        throw Error.duplicate("global variable", name, first.range, second.range)
-    //      case _ => groupedVars.map { case (name, vars) => (name, vars.head) }
-    //    }, varInits)
-    //    a
-  }
+class Module(val file: File, fileContent: => (Map[String, GlobalVar], List[UserGlobalVarInit])) {
+  lazy val (vars, varInits) = fileContent
 
   def format(indentation: Int): String = {
     def section(string: String) = string match {
@@ -137,7 +120,7 @@ class Module(val file: File, fileContent: => (Map[String, GlobalVar], List[Analy
     }
 
     val formattedBuiltin = section(vars.filter(_._2.isInstanceOf[BuiltinGlobalVar]).map(v => s"${v._2.asInstanceOf[BuiltinGlobalVar].format(indentation + 1)}\n").mkString)
-    val formattedVars = section(varInits.map(v => s"${v.format(indentation + 1)}\n").mkString)
+    val formattedVars = section(varInits.map(v => s"${v.format(indentation + 1)}\n\n").mkString)
     s"${" " * indentation}module ${file.name} {\n$formattedBuiltin$formattedVars}\n"
   }
 }
