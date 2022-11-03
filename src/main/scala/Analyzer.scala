@@ -70,12 +70,12 @@ def builtinVars(module: => Module): List[GlobalVar] = List(
         Asm.Sub(Reg.RBX, 1),
         StoreImm(Address(Reg.RBX), 10, RegSize.Byte),
 
+        Mov(Reg.RSI, Reg.RAX),
         Asm.Cmp(Reg.RAX, 0),
         DirCondJump(noNegLabel, Flag.GreaterOrEqual),
         Neg(Reg.RAX),
 
-        Mov(Reg.RSI, Reg.RAX, Some(noNegLabel)),
-        LoadImm(Reg.RCX, 10),
+        LoadImm(Reg.RCX, 10, RegSize.QWord, Some(noNegLabel)),
 
         Asm.Xor(Reg.RDX, Reg.RDX, Some(loopLabel)),
         Idiv(Reg.RCX),
@@ -109,16 +109,13 @@ def builtinVars(module: => Module): List[GlobalVar] = List(
 
 def analyzeFile(stmts: List[GlobalStmt], file: File): Module = {
   lazy val module: Module = new Module(file, {
-    val (analyzedPatterns, vars) = (for (stmt <- stmts) yield {
+    val (varInits, userVars) = (for (stmt <- stmts) yield {
       lazy val (analyzedPattern: AnalyzedPattern[UserGlobalVar], vars: List[UserGlobalVar]) = AnalyzedPattern.map((pattern, patternNav) => new UserGlobalVar(module, pattern.name, init, patternNav, pattern.datatype, pattern.range), stmt.pattern)
       lazy val init = new UserGlobalVarInit(module, stmt.expr, analyzedPattern)
-      (analyzedPattern, vars)
+      (init, vars)
     }).unzip
 
-    (
-      AnalyzedPattern.verify(vars.flatten.asInstanceOf[List[GlobalVar]] ::: builtinVars(module)),
-      analyzedPatterns.zip(stmts.map(_.expr)).map { case (analyzedPattern, expr) => new UserGlobalVarInit(module, expr, analyzedPattern) }
-    )
+    ((userVars.flatten ::: builtinVars(module)).groupBy(_.name), varInits)
   })
 
   module.varInits.foreach(_.typeCheck())
@@ -127,7 +124,7 @@ def analyzeFile(stmts: List[GlobalStmt], file: File): Module = {
 
   CodeGen.main(
     Lea(Reg.RBP, Address(secondaryStack)),
-    DirCall(module.vars("main").constVal.get.asInstanceOf[ConstFunction].function.label),
+    DirCall(module.vars("main").head.constVal.get.asInstanceOf[ConstFunction].function.label),
     Asm.Sub(Reg.RSP, 56),
     Asm.Xor(Reg.RCX, Reg.RCX),
     IndCall(Address(CodeGen.windowsFunction("ExitProcess")))

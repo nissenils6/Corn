@@ -203,21 +203,83 @@ case class AnalyzedFunExpr(fun: Fun, range: FilePosRange) extends AnalyzedExpr
 case class AnalyzedFunTypeExpr(parameters: List[AnalyzedExpr], returnTypeExpr: AnalyzedExpr, range: FilePosRange) extends AnalyzedExpr
 
 class LocalVar(val module: Module, val name: String, letExpr: => Option[AnalyzedLetExpr], patternNav: PatternNav, typeExpr: Option[Expr], val range: FilePosRange) extends AnalyzerVar {
-  lazy val datatype: Datatype = typeExpr.map(typeExpr =>  analyzeExpr(ExprParsingContext(module, None))(typeExpr).constDatatype).getOrElse(patternNav.datatype(letExpr match {
+  lazy val datatype: Datatype = typeExpr.map(typeExpr => analyzeExpr(ExprParsingContext(module, None))(typeExpr).constDatatype).getOrElse(patternNav.datatype(letExpr match {
     case Some(letExpr) => letExpr.expr.returnType
     case None => throw Error.todo(module.file)
   }))
 }
 
+abstract class OverloadLayer {
+  def apply(funRange: FilePosRange, posArgs: List[AnalyzedExpr], keywordArgs: List[(String, AnalyzedExpr)]): Option[(AnalyzerVar, List[AnalyzedExpr])]
+}
+
+case class LocalOverloadLayer(localVar: LocalVar) extends OverloadLayer {
+  override def apply(funRange: FilePosRange, posArgs: List[AnalyzedExpr], keywordArgs: List[(String, AnalyzedExpr)]): Option[(AnalyzerVar, List[AnalyzedExpr])] = (posArgs, keywordArgs, localVar.datatype) match {
+    case (posArgs, List(), funDatatype: FunDatatype) if funDatatype.params == posArgs.map(_.returnType) => Some((localVar, posArgs))
+    case _ => None
+  }
+}
+
+case class GlobalOverloadLayer(globalVars: List[GlobalVar]) extends OverloadLayer {
+  override def apply(funRange: FilePosRange, posArgs: List[AnalyzedExpr], keywordArgs: List[(String, AnalyzedExpr)]): Option[(AnalyzerVar, List[AnalyzedExpr])] = {
+    def fit(globalVar: GlobalVar): Option[(AnalyzerVar, List[AnalyzedExpr])] = (posArgs, keywordArgs, globalVar.constVal) match {
+      case (posArgs, keywordArgs, Some(ConstFunction(function))) =>
+        val (noArgs, keywordAsPosArgs) = keywordArgs.partitionMap { case (str, expr) =>
+          function.argNameToIndex.get(str) match {
+            case Some(index) => Right((expr, index))
+            case None => Left(expr)
+          }
+        }
+        if (noArgs.nonEmpty) return None
+        val (multipleArgs, args) = (posArgs.zipWithIndex ::: keywordAsPosArgs).groupMap(_._2)(_._1).partitionMap {
+          case (index, List(arg)) => Right((index, arg))
+          case (index, args) => Left((index, args))
+        }
+        if (multipleArgs.nonEmpty) throw Error.todo(funRange.file)
+        val argsMap = args.map(_._1).toSet
+        if (Range(0, function.argTypes.length).forall(argsMap.contains)) {
+          Some(args.toList.sortWith((t1, t2) => t1._1 > t2._1).map(_._2)).filter(function.argTypes == _.map(_.returnType)).map((globalVar, _))
+        } else
+          None
+      case (posArgs, List(), _) => globalVar.datatype match {
+        case funDatatype: FunDatatype if funDatatype.params == posArgs.map(_.returnType) => Some((globalVar, posArgs))
+        case _ => None
+      }
+      case _ => None
+    }
+
+    globalVars.map(fit).filter(_.nonEmpty).map(_.get) match {
+      case List() => None
+      case List(single) => Some(single)
+      case varList => throw Error(Error.SEMANTIC, funRange.file, ErrorComponent(funRange, Some("Multiple matches for overloaded reference")) :: varList.map { case (globalVar, _) => ErrorComponent(globalVar.range, Some("One match")) }, Some("Ambiguous reference"))
+    }
+  }
+}
+
 class ExprParsingContext(val module: Module, val fun: Option[UserFun]) {
   private var vars = List[LocalVar]()
 
-  def lookup(name: String): Option[AnalyzerVar] = {
+  def lookup(name: String, range: FilePosRange): Option[AnalyzerVar] = {
     @tailrec
     def rec(list: List[AnalyzerVar]): Option[AnalyzerVar] = if (list.isEmpty) {
-      fun.flatMap(_.params.get(name)).orElse(module.vars.get(name))
+      fun.flatMap(_.params.get(name)).orElse(module.vars.get(name).map {
+        case List(globalVar) => globalVar
+        case varList => throw Error(Error.SEMANTIC, range.file, ErrorComponent(range, Some("Multiple matches for reference")) :: varList.map(globalVar => ErrorComponent(globalVar.range, Some("One match"))), Some("Ambiguous reference"))
+      })
     } else if (list.head.name == name) {
       Some(list.head)
+    } else {
+      rec(list.tail)
+    }
+
+    rec(vars)
+  }
+
+  def lookupOverload(name: String): List[OverloadLayer] = {
+    def rec(list: List[LocalVar]): List[OverloadLayer] = if (list.isEmpty) {
+      fun.flatMap(_.params.get(name)).map(localVar => LocalOverloadLayer(localVar)).toList ::: module.vars.get(name).map(globalVars => GlobalOverloadLayer(globalVars)).toList
+    } else if (list.head.name == name) {
+      LocalOverloadLayer(list.head) :: rec(list.tail)
     } else {
       rec(list.tail)
     }
@@ -309,25 +371,33 @@ class ExprCodeGenContext {
 }
 
 def analyzeExpr(ctx: ExprParsingContext)(expr: Expr): AnalyzedExpr = expr match {
-  case CallExpr(function, posArgs, keywordArgs, range) =>
+  case CallExpr(RefExpr(iden, funRange), posArgs, keywordArgs, range) =>
+    val overloadLayers = ctx.lookupOverload(iden)
+    val analyzedPosArgs = posArgs.map(analyzeExpr(ctx))
+    val analyzedKeywordArgs = keywordArgs.map { case (name, argExpr) => (name, analyzeExpr(ctx)(argExpr)) }
+    val appliedLayers = overloadLayers.map(_.apply(funRange, analyzedPosArgs, analyzedKeywordArgs))
+    appliedLayers.find(_.nonEmpty).flatten match {
+      case Some((globalVar: GlobalVar, args)) => AnalyzedCallExpr(AnalyzedGlobalVarRefExpr(globalVar, funRange), args, range)
+      case Some((localVar: LocalVar, args)) => AnalyzedCallExpr(AnalyzedLocalVarRefExpr(localVar, funRange), args, range)
+      case _ => throw Error.todo(funRange)
+    }
+  case CallExpr(function, posArgs, List(), range) =>
     val analyzedFunExpr = analyzeExpr(ctx)(function)
     analyzedFunExpr.returnType match {
-      case FunDatatype(params, returnType) =>
-        if (params.length != posArgs.length) {
-          throw Error.todo(range.file)
-        }
+      case FunDatatype(params, _) =>
+        if (params.length != posArgs.length) throw Error.todo(range.file)
         val analyzedArgs = posArgs.map(analyzeExpr(ctx))
-        if (!params.zip(analyzedArgs.map(_.returnType)).forall(t => t._1 == t._2)) {
-          throw Error.todo(range)
-        }
+        if (!params.zip(analyzedArgs.map(_.returnType)).forall(t => t._1 == t._2)) throw Error.todo(range)
         AnalyzedCallExpr(analyzedFunExpr, analyzedArgs, range)
-      case datatype => throw Error.semantic(s"Datatype '$datatype' is not callable", function.range)
+      case datatype => throw Error.semantic(s"'$datatype' is not callable", function.range)
     }
-  case RefExpr(iden, range) => ctx.lookup(iden) match {
-    case Some(v) => v match {
-      case globalVar: GlobalVar => AnalyzedGlobalVarRefExpr(globalVar, range)
-      case localVar: LocalVar => AnalyzedLocalVarRefExpr(localVar, range)
-    }
+  case CallExpr(function, _, keywordArgs, range) => throw Error(Error.SEMANTIC, range.file,
+    ErrorComponent(function.range, Some("This is an expression that, when evaluated, returns a function\nIn order to use keyword arguments, a direct reference is required")) :: keywordArgs.map { case (_, argExpr) => ErrorComponent(argExpr.range, Some("Disallowed keyword argument")) },
+    Some("Keyword arguments are not allowed for indirect function calls")
+  )
+  case RefExpr(iden, range) => ctx.lookup(iden, range) match {
+    case Some(globalVar: GlobalVar) => AnalyzedGlobalVarRefExpr(globalVar, range)
+    case Some(localVar: LocalVar) => AnalyzedLocalVarRefExpr(localVar, range)
     case None => throw Error.todo(ctx.toString, range)
   }
   case IntExpr(int, range) => AnalyzedIntExpr(int, range)

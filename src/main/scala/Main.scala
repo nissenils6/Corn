@@ -45,6 +45,7 @@ def compile(filePath: String): Unit = {
     case error: (Error | ErrorGroup) =>
       printSeparator()
       print(error)
+      error.printStackTrace()
   }
 }
 

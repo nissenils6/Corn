@@ -34,6 +34,10 @@ class UserGlobalVarInit(module: => Module, expr: Expr, pattern: => AnalyzedPatte
   lazy val analyzedPattern: AnalyzedPattern[UserGlobalVar] = pattern
 
   def typeCheck(): Unit = {
+    analyzedPattern
+    analyzedExpr
+    analyzedPattern.datatype
+    analyzedExpr.returnType
     if (analyzedPattern.datatype != analyzedExpr.returnType) throw Error.typeMismatch(analyzedExpr.returnType, analyzedPattern.datatype, analyzedExpr.range, analyzedPattern.range)
   }
 
@@ -43,6 +47,7 @@ class UserGlobalVarInit(module: => Module, expr: Expr, pattern: => AnalyzedPatte
 abstract class Fun {
   def range: FilePosRange
   def argTypes: List[Datatype]
+  def argNameToIndex: Map[String, Int]
   def returnType: Datatype
 
   def format(indentation: Int): String
@@ -57,6 +62,8 @@ abstract class Fun {
 
 class BuiltinFun(val module: Module, val argTypes: List[Datatype], val returnType: Datatype, evalFunction: List[ConstVal] => Option[ConstVal], generateFunction: () => List[Instr]) extends Fun {
   override def range: FilePosRange = module.file.lastRange
+
+  override def argNameToIndex: Map[String, Int] = Map()
 
   override def format(indentation: Int): String = s"builtin fun(${argTypes.mkString(", ")}): $returnType"
 
@@ -76,6 +83,10 @@ class UserFun(val module: Module, val name: String, parameters: List[Pattern], r
   lazy val analyzedExpr: AnalyzedExpr = analyzeExpr(new ExprParsingContext(module, Some(this)))(expr)
 
   lazy val argTypes: List[Datatype] = args.map(_.datatype)
+  lazy val argNameToIndex: Map[String, Int] = args.zipWithIndex.flatMap{
+    case (AnalyzedVarPattern(patternVar, _), index) => List((patternVar.name, index))
+    case _ => List()
+  }.toMap
   lazy val returnType: Datatype = retTypeExpr.map(retTypeExpr => analyzeExpr(new ExprParsingContext(module, None))(retTypeExpr).constDatatype).getOrElse(analyzedExpr.returnType)
 
   override def format(indentation: Int): String = s"fn(${args.map(_.format(indentation)).mkString(", ")}): $returnType => ${analyzedExpr.format(indentation)}"
@@ -110,7 +121,7 @@ class UserFun(val module: Module, val name: String, parameters: List[Pattern], r
   }
 }
 
-class Module(val file: File, fileContent: => (Map[String, GlobalVar], List[UserGlobalVarInit])) {
+class Module(val file: File, fileContent: => (Map[String, List[GlobalVar]], List[UserGlobalVarInit])) {
   lazy val (vars, varInits) = fileContent
 
   def format(indentation: Int): String = {
