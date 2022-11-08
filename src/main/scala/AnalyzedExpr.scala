@@ -9,7 +9,6 @@ abstract class AnalyzedExpr() {
     case AnalyzedCallExpr(function, _, _) => function.returnType.asInstanceOf[FunDatatype].returnType
     case AnalyzedGlobalVarRefExpr(globalVar, _) => globalVar.datatype
     case AnalyzedLocalVarRefExpr(localVar, _) => localVar.datatype
-    case AnalyzedGlobalFunRefExpr(globalFun, _) => globalFun.signature
     case AnalyzedIntExpr(_, _) => IntDatatype
     case AnalyzedTupleExpr(elements, _) => TupleDatatype(elements.map(_.returnType))
     case AnalyzedBlockExpr(_, lastExpr, _, _) => lastExpr.returnType
@@ -25,8 +24,7 @@ abstract class AnalyzedExpr() {
       argValues <- args.map(_.constVal).extract
     } yield fun.asInstanceOf[ConstFunction].function.constEval(argValues)).flatten
     case AnalyzedGlobalVarRefExpr(globalVar, _) => globalVar.constVal
-    case AnalyzedLocalVarRefExpr(_, range) => throw Error.todo(s"Attempt at compile time evaluating a local variable reference expression outside of a expression evaluation context", range)
-    case AnalyzedGlobalFunRefExpr(globalFun, _) => Some(ConstFunction(globalFun))
+    case AnalyzedLocalVarRefExpr(localVar, _) => localVar.constVal
     case AnalyzedIntExpr(int, _) => Some(ConstInt(int))
     case AnalyzedTupleExpr(elements, _) => elements.map(_.constVal).extract.map(vals => ConstTuple(vals))
     case AnalyzedBlockExpr(_, _, _, _) => constEval(ExprConstEvalContext())
@@ -49,7 +47,6 @@ abstract class AnalyzedExpr() {
     } yield fun.asInstanceOf[ConstFunction].function.constEval(argValues)).flatten, range)
     case AnalyzedGlobalVarRefExpr(globalVar, range) => mapToConstDatatype(globalVar.constVal, range)
     case AnalyzedLocalVarRefExpr(_, _) => throw Error.todo(s"Attempt at compile time evaluating a local variable reference expression outside of a expression evaluation context", range)
-    case AnalyzedGlobalFunRefExpr(globalFun, range) => throw Error.datatypeExpected(globalFun.signature, range)
     case AnalyzedIntExpr(_, range) => throw Error.datatypeExpected(IntDatatype, range)
     case AnalyzedTupleExpr(elements, _) => TupleDatatype(elements.map(_.constDatatype))
     case AnalyzedBlockExpr(_, _, _, range) => mapToConstDatatype(constEval(ExprConstEvalContext()), range)
@@ -65,8 +62,7 @@ abstract class AnalyzedExpr() {
       argValues <- args.map(_.constEval(ctx)).extract
     } yield fun.asInstanceOf[ConstFunction].function.constEval(argValues)).flatten
     case AnalyzedGlobalVarRefExpr(globalVar, _) => globalVar.constVal
-    case AnalyzedLocalVarRefExpr(localVar, _) => Some(ctx.lookup(localVar))
-    case AnalyzedGlobalFunRefExpr(globalFun, _) => Some(ConstFunction(globalFun))
+    case AnalyzedLocalVarRefExpr(localVar, _) => "Ouchilipouchilidouchili" // Some(ctx.lookup(localVar))
     case AnalyzedIntExpr(int, _) => Some(ConstInt(int))
     case AnalyzedTupleExpr(elements, _) => elements.map(element => element.constEval(ctx)).extract.map(vals => ConstTuple(vals))
     case AnalyzedBlockExpr(exprs, lastExpr, _, _) => ctx.scope({
@@ -79,97 +75,111 @@ abstract class AnalyzedExpr() {
     case AnalyzedFunTypeExpr(parameters, returnType, _) => Some(ConstType(FunDatatype(parameters.map(_.constDatatype), returnType.constDatatype)))
   }
 
-  def generateCode(ctx: ExprCodeGenContext): Unit = this match {
-    case AnalyzedCallExpr(function, args, _) =>
-      val signature = function.returnType.asInstanceOf[FunDatatype]
+  def generateCode(ctx: ExprCodeGenContext, topLevel: Boolean = false): Unit = constVal match {
+    case Some(constVal) => if (!topLevel) {
+      ctx.add(constVal.generateCode(Reg.RBP + ctx.secondaryOffset))
+      ctx.secondaryOffset += constVal.datatype.size.roundUp(8)
+    }
+    case None => this match {
+      case AnalyzedCallExpr(functionExpr, args, _) => functionExpr.constVal match {
+        case Some(ConstFunction(function)) => if (!function.generateInlineCode(ctx)) {
+          val argOffset = ctx.secondaryOffset
+          args.foreach(_.generateCode(ctx))
 
-      val argOffset = ctx.secondaryOffset
-      function.generateCode(ctx)
-      ctx.secondaryOffset -= 8
-      ctx.add(
-        Load(Reg.RAX, Reg.RBP + ctx.secondaryOffset),
-        Store(Reg.RSP + (ctx.offset - 8), Reg.RAX)
-      )
+          ctx.add(
+            Asm.Sub(Reg.RSP, -(ctx.offset - 8)),
+            Asm.Add(Reg.RBP, argOffset),
+            DirCall(function.label),
+            Asm.Sub(Reg.RBP, argOffset),
+            Asm.Add(Reg.RSP, -(ctx.offset - 8))
+          )
+          ctx.secondaryOffset = argOffset + function.returnType.size.roundUp(8)
+        }
+        case _ =>
+          val signature = functionExpr.returnType.asInstanceOf[FunDatatype]
 
-      ctx.offset -= 16
-      args.foreach(_.generateCode(ctx))
-      ctx.offset += 16
+          val argOffset = ctx.secondaryOffset
+          functionExpr.generateCode(ctx)
+          ctx.secondaryOffset -= 8
+          ctx.add(
+            Load(Reg.RAX, Reg.RBP + ctx.secondaryOffset),
+            Store(Reg.RSP + (ctx.offset - 8), Reg.RAX)
+          )
 
-      ctx.add(
-        Load(Reg.RAX, Reg.RSP + (ctx.offset - 8)),
-        Asm.Sub(Reg.RSP, -(ctx.offset - 8)),
-        Asm.Add(Reg.RBP, argOffset),
-        IndRegCall(Reg.RAX),
-        Asm.Sub(Reg.RBP, argOffset),
-        Asm.Add(Reg.RSP, -(ctx.offset - 8))
-      )
-      ctx.secondaryOffset = argOffset + signature.returnType.size.roundUp(8)
-    case AnalyzedGlobalVarRefExpr(globalVar, range) =>
-      val stackOffset = ctx.secondaryOffset
-      ctx.secondaryOffset += globalVar.datatype.size.roundUp(8)
-      globalVar.label match {
-        case Some(label) => globalVar.datatype.generateCopyCode(ctx, Reg.RBP + stackOffset, Address(label))
-        case None => throw Error.todo(range)
+          ctx.offset -= 16
+          args.foreach(_.generateCode(ctx))
+          ctx.offset += 16
+
+          ctx.add(
+            Load(Reg.RAX, Reg.RSP + (ctx.offset - 8)),
+            Asm.Sub(Reg.RSP, -(ctx.offset - 8)),
+            Asm.Add(Reg.RBP, argOffset),
+            IndRegCall(Reg.RAX),
+            Asm.Sub(Reg.RBP, argOffset),
+            Asm.Add(Reg.RSP, -(ctx.offset - 8))
+          )
+          ctx.secondaryOffset = argOffset + signature.returnType.size.roundUp(8)
       }
-    case AnalyzedLocalVarRefExpr(localVar, _) =>
-      val stackOffset = ctx.secondaryOffset
-      ctx.secondaryOffset += localVar.datatype.size.roundUp(8)
-      localVar.datatype.generateCopyCode(ctx, Reg.RBP + stackOffset, Reg.RSP + ctx.lookup(localVar))
-    case AnalyzedGlobalFunRefExpr(globalFun, _) =>
-      ctx.add(
-        Lea(Reg.RAX, Address(globalFun.label)),
-        Store(Reg.RBP + ctx.secondaryOffset, Reg.RAX)
-      )
-      ctx.secondaryOffset += 8
-    case AnalyzedIntExpr(int, _) =>
-      ctx.add(StoreImm(Reg.RBP + ctx.secondaryOffset, int))
-      ctx.secondaryOffset += 8
-    case AnalyzedTupleExpr(elements, _) =>
-      val stackOffset = ctx.secondaryOffset
-      val (tupleSize, _, tupleOffsets) = Datatype.alignSequence(elements.map(_.returnType))
-      ctx.secondaryOffset += tupleSize.roundUp(8)
-      val elementOffset = ctx.secondaryOffset
-      for ((expr, offset) <- elements.zip(tupleOffsets)) {
-        expr.generateCode(ctx)
-        expr.returnType.generateCopyCode(ctx, Reg.RBP + (stackOffset + offset), Reg.RBP + elementOffset)
-        ctx.secondaryOffset = elementOffset
-      }
-    case AnalyzedBlockExpr(exprs, lastExpr, vars, _) => ctx.scope({
-      val varOffset = ctx.offset
-      vars.foreach(ctx.add)
-      ctx.offset = ctx.offset.roundDown(16)
-      exprs.foreach(expr => {
-        expr.generateCode(ctx)
-        ctx.secondaryOffset -= expr.returnType.size.roundUp(8)
+      case AnalyzedGlobalVarRefExpr(globalVar, range) =>
+        val stackOffset = ctx.secondaryOffset
+        ctx.secondaryOffset += globalVar.datatype.size.roundUp(8)
+        globalVar.label match {
+          case Some(label) => globalVar.datatype.generateCopyCode(ctx, Reg.RBP + stackOffset, Address(label))
+          case None => throw Error.todo(range)
+        }
+      case AnalyzedLocalVarRefExpr(localVar, _) =>
+        val stackOffset = ctx.secondaryOffset
+        ctx.secondaryOffset += localVar.datatype.size.roundUp(8)
+        localVar.datatype.generateCopyCode(ctx, Reg.RBP + stackOffset, Reg.RSP + ctx.lookup(localVar))
+      case AnalyzedIntExpr(int, _) =>
+        ctx.add(StoreImm(Reg.RBP + ctx.secondaryOffset, int))
+        ctx.secondaryOffset += 8
+      case AnalyzedTupleExpr(elements, _) =>
+        val stackOffset = ctx.secondaryOffset
+        val (tupleSize, _, tupleOffsets) = Datatype.alignSequence(elements.map(_.returnType))
+        ctx.secondaryOffset += tupleSize.roundUp(8)
+        val elementOffset = ctx.secondaryOffset
+        for ((expr, offset) <- elements.zip(tupleOffsets)) {
+          expr.generateCode(ctx)
+          expr.returnType.generateCopyCode(ctx, Reg.RBP + (stackOffset + offset), Reg.RBP + elementOffset)
+          ctx.secondaryOffset = elementOffset
+        }
+      case AnalyzedBlockExpr(exprs, lastExpr, vars, _) => ctx.scope({
+        val varOffset = ctx.offset
+        vars.foreach(ctx.add)
+        ctx.offset = ctx.offset.roundDown(16)
+        exprs.foreach(expr => {
+          expr.generateCode(ctx, true)
+          ctx.secondaryOffset -= expr.returnType.size.roundUp(8)
+        })
+        lastExpr.generateCode(ctx)
+        ctx.offset = varOffset
       })
-      lastExpr.generateCode(ctx)
-      ctx.offset = varOffset
-    })
-    case AnalyzedUnitExpr(_) => ()
-    case AnalyzedLetExpr(pattern, expr, _) =>
-      val stackOffset = ctx.secondaryOffset
-      expr.generateCode(ctx)
+      case AnalyzedUnitExpr(_) => ()
+      case AnalyzedLetExpr(pattern, expr, _) =>
+        val stackOffset = ctx.secondaryOffset
+        expr.generateCode(ctx)
 
-      def iteratePattern(pattern: AnalyzedPattern[LocalVar], offset: Int): Unit = pattern match {
-        case AnalyzedVarPattern(patternVar, _) => patternVar.datatype.generateCopyCode(ctx, Reg.RSP + ctx.lookup(patternVar), Reg.RBP + offset)
-        case AnalyzedTuplePattern(elements, _) => elements.zip(Datatype.alignSequence(elements.map(_.datatype))._3.map(_ + offset)).foreach(iteratePattern.tupled)
-      }
+        def iteratePattern(pattern: AnalyzedPattern[LocalVar], offset: Int): Unit = pattern match {
+          case AnalyzedVarPattern(patternVar, _) => patternVar.datatype.generateCopyCode(ctx, Reg.RSP + ctx.lookup(patternVar), Reg.RBP + offset)
+          case AnalyzedTuplePattern(elements, _) => elements.zip(Datatype.alignSequence(elements.map(_.datatype))._3.map(_ + offset)).foreach(iteratePattern.tupled)
+        }
 
-      iteratePattern(pattern, stackOffset)
-    case AnalyzedFunExpr(fun, _) =>
-      ctx.add(
-        Lea(Reg.RAX, Address(fun.label)),
-        Store(Reg.RBP + ctx.secondaryOffset, Reg.RAX)
-      )
-      ctx.secondaryOffset += 8
-    case AnalyzedFunTypeExpr(_, _, range) => Error.todo("", range)
+        iteratePattern(pattern, stackOffset)
+      case AnalyzedFunExpr(fun, _) =>
+        ctx.add(
+          Lea(Reg.RAX, Address(fun.label)),
+          Store(Reg.RBP + ctx.secondaryOffset, Reg.RAX)
+        )
+        ctx.secondaryOffset += 8
+      case AnalyzedFunTypeExpr(_, _, range) => Error.todo("", range)
+    }
   }
 
   def format(indentation: Int): String = this match {
     case AnalyzedCallExpr(function, args, _) => s"${function.format(indentation)}(${args.map(_.format(indentation)).mkString(", ")})"
     case AnalyzedGlobalVarRefExpr(globalVar, _) => s"${globalVar.name}"
     case AnalyzedLocalVarRefExpr(localVar, _) => s"${localVar.name}"
-    case AnalyzedGlobalFunRefExpr(globalFun, _) => s"LOL"
     case AnalyzedIntExpr(int, _) => s"$int"
     case AnalyzedTupleExpr(elements, _) => s"(${elements.map(_.format(indentation)).mkString(", ")})"
     case AnalyzedBlockExpr(exprs, lastExpr, _, _) => s"{\n${exprs.map(e => s"${" " * (indentation + 1)}${e.format(indentation + 1)};\n").mkString}${" " * (indentation + 1)}${lastExpr.format(indentation + 1)}\n${" " * indentation}}"
@@ -185,8 +195,6 @@ case class AnalyzedCallExpr(function: AnalyzedExpr, args: List[AnalyzedExpr], ra
 case class AnalyzedGlobalVarRefExpr(globalVar: GlobalVar, range: FilePosRange) extends AnalyzedExpr
 
 case class AnalyzedLocalVarRefExpr(localVar: LocalVar, range: FilePosRange) extends AnalyzedExpr
-
-case class AnalyzedGlobalFunRefExpr(globalFun: Fun, range: FilePosRange) extends AnalyzedExpr
 
 case class AnalyzedIntExpr(int: Int, range: FilePosRange) extends AnalyzedExpr
 
@@ -207,6 +215,7 @@ class LocalVar(val module: Module, val name: String, letExpr: => Option[Analyzed
     case Some(letExpr) => letExpr.expr.returnType
     case None => throw Error.todo(module.file)
   }))
+  lazy val constVal: Option[ConstVal] = letExpr.flatMap(_.constVal.map(patternNav.const))
 }
 
 abstract class OverloadLayer {
@@ -238,7 +247,7 @@ case class GlobalOverloadLayer(globalVars: List[GlobalVar]) extends OverloadLaye
         if (multipleArgs.nonEmpty) throw Error.todo(funRange.file)
         val argsMap = args.map(_._1).toSet
         if (Range(0, function.argTypes.length).forall(argsMap.contains)) {
-          Some(args.toList.sortWith((t1, t2) => t1._1 > t2._1).map(_._2)).filter(function.argTypes == _.map(_.returnType)).map((globalVar, _))
+          Some(args.toList.sortWith((t1, t2) => t1._1 < t2._1).map(_._2)).filter(function.argTypes == _.map(_.returnType)).map((globalVar, _))
         } else
           None
       case (posArgs, List(), _) => globalVar.datatype match {
@@ -308,10 +317,10 @@ class ExprParsingContext(val module: Module, val fun: Option[UserFun]) {
 class ExprConstEvalContext {
   private var vars = mutable.Map[LocalVar, ConstVal]()
 
-  def lookup(localVar: LocalVar): ConstVal = {
+  def lookup(localVar: LocalVar): ConstVal = localVar.constVal.getOrElse({
     if (!vars.contains(localVar)) throw Error.todo(s"Failed compile time code execution: local variable not initialized", localVar.range)
     vars(localVar)
-  }
+  })
 
   def add(localVar: LocalVar, value: ConstVal): ConstVal = {
     vars(localVar) = value
@@ -357,6 +366,8 @@ class ExprCodeGenContext {
   def add(instr: Instr): Unit = if instr.redundant then () else instructions.append(instr)
 
   def add(instr: Instr*): Unit = instr.foreach(add)
+
+  def add(instr: List[Instr]): Unit = instr.foreach(add)
 
   def scope[T](f: => T): T = {
     val copy = varOffsets.clone()

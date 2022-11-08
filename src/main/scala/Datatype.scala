@@ -81,6 +81,8 @@ abstract class ConstVal {
 
   def toInt: Int = asInstanceOf[ConstInt].int
 
+  def generateCode(address: Address): List[Instr]
+
   override def toString: String = this match {
     case ConstUnit => "()"
     case ConstInt(int) => s"$int"
@@ -90,12 +92,28 @@ abstract class ConstVal {
   }
 }
 
-case object ConstUnit extends ConstVal
+case object ConstUnit extends ConstVal {
+  override def generateCode(address: Address): List[Instr] = List()
+}
 
-case class ConstInt(int: Int) extends ConstVal
+case class ConstInt(int: Int) extends ConstVal {
+  override def generateCode(address: Address): List[Instr] = List(
+    StoreImm(address, int)
+  )
+}
 
-case class ConstType(valDatatype: Datatype) extends ConstVal
+case class ConstType(valDatatype: Datatype) extends ConstVal {
+  override def generateCode(address: Address): List[Instr] = List()
+}
 
-case class ConstTuple(elements: List[ConstVal]) extends ConstVal
+case class ConstTuple(elements: List[ConstVal]) extends ConstVal {
+  override def generateCode(address: Address): List[Instr] =
+    elements.zip(Datatype.alignSequence(elements.map(_.datatype))._3).flatMap { case (element, offset) => element.generateCode(address + offset) }
+}
 
-case class ConstFunction(function: Fun) extends ConstVal
+case class ConstFunction(function: Fun) extends ConstVal {
+  override def generateCode(address: Address): List[Instr] = List(
+    Lea(Reg.RAX, Address(function.label)),
+    Store(address, Reg.RAX)
+  )
+}

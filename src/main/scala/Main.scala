@@ -37,8 +37,8 @@ def compile(filePath: String): Unit = {
 
     printSeparator()
 
-    new PrintWriter("C:\\Users\\nisse\\OneDrive\\Skrivbord\\Corn\\TestCode.asm") {
-      write(CodeGen.toString);
+    new PrintWriter("C:/Users/nisse/Desktop/Corn/TestCode.asm") {
+      write(CodeGen.toString)
       close()
     }
   } catch {
@@ -50,5 +50,5 @@ def compile(filePath: String): Unit = {
 }
 
 @main def main(): Unit = {
-  compile("C:/Users/nisse/OneDrive/Skrivbord/Corn/TestCode.txt")
+  compile("C:/Users/nisse/Desktop/Corn/TestCode.txt")
 }

@@ -55,12 +55,13 @@ abstract class Fun {
 
   def constEval(args: List[ConstVal]): Option[ConstVal]
   def generateCode: List[Instr]
+  def generateInlineCode(ctx: ExprCodeGenContext): Boolean
 
   lazy val signature: FunDatatype = FunDatatype(argTypes, returnType)
   lazy val label: String = CodeGen.function(generateCode)
 }
 
-class BuiltinFun(val module: Module, val argTypes: List[Datatype], val returnType: Datatype, evalFunction: List[ConstVal] => Option[ConstVal], generateFunction: () => List[Instr]) extends Fun {
+class BuiltinFun(val module: Module, val argTypes: List[Datatype], val returnType: Datatype, eval: List[ConstVal] => Option[ConstVal], generate: () => List[Instr], inlineGenerate: ExprCodeGenContext => Boolean = _ => false) extends Fun {
   override def range: FilePosRange = module.file.lastRange
 
   override def argNameToIndex: Map[String, Int] = Map()
@@ -69,9 +70,11 @@ class BuiltinFun(val module: Module, val argTypes: List[Datatype], val returnTyp
 
   override def typeCheck(): Unit = ()
 
-  override def constEval(args: List[ConstVal]): Option[ConstVal] = evalFunction(args)
+  override def constEval(args: List[ConstVal]): Option[ConstVal] = eval(args)
 
-  override def generateCode: List[Instr] = generateFunction()
+  override def generateCode: List[Instr] = generate()
+
+  override def generateInlineCode(ctx: ExprCodeGenContext): Boolean = inlineGenerate(ctx)
 }
 
 class UserFun(val module: Module, val name: String, parameters: List[Pattern], retTypeExpr: Option[Expr], expr: Expr, val range: FilePosRange) extends Fun {
@@ -119,6 +122,8 @@ class UserFun(val module: Module, val name: String, parameters: List[Pattern], r
     ctx.add(Ret())
     ctx.code
   }
+
+  override def generateInlineCode(ctx: ExprCodeGenContext): Boolean = false
 }
 
 class Module(val file: File, fileContent: => (Map[String, List[GlobalVar]], List[UserGlobalVarInit])) {

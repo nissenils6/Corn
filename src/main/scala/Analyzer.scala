@@ -11,7 +11,14 @@ def builtinVars(module: => Module): List[GlobalVar] = List(
       Load(Reg.RAX, Reg.RBP + 8),
       Asm.Add(Address(Reg.RBP), Reg.RAX),
       Ret()
-    )
+    ),
+    ctx => {
+      ctx.add(
+        Load(Reg.RAX, Reg.RBP + ctx.secondaryOffset + 8),
+        Asm.Add(Reg.RBP + ctx.secondaryOffset, Reg.RAX)
+      )
+      true
+    }
   ))),
   new BuiltinGlobalVar(module, "-", ConstFunction(new BuiltinFun(module, List(IntDatatype, IntDatatype), IntDatatype,
     args => Some(ConstInt(args.head.toInt - args(1).toInt)),
@@ -19,7 +26,14 @@ def builtinVars(module: => Module): List[GlobalVar] = List(
       Load(Reg.RAX, Reg.RBP + 8),
       Asm.Sub(Address(Reg.RBP), Reg.RAX),
       Ret()
-    )
+    ),
+    ctx => {
+      ctx.add(
+        Load(Reg.RAX, Reg.RBP + ctx.secondaryOffset + 8),
+        Asm.Sub(Reg.RBP + ctx.secondaryOffset, Reg.RAX)
+      )
+      true
+    }
   ))),
   new BuiltinGlobalVar(module, "*", ConstFunction(new BuiltinFun(module, List(IntDatatype, IntDatatype), IntDatatype,
     args => Some(ConstInt(args.head.toInt * args(1).toInt)),
