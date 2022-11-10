@@ -1,4 +1,7 @@
+package lex
+
 import scala.annotation.{targetName, unused}
+import core.*
 
 type LexerResult = Either[ErrorComponent, Token]
 
@@ -51,7 +54,7 @@ case class SymbolToken(symbol: String, range: FilePosRange) extends Token
 
 case class KeywordToken(keyword: String, range: FilePosRange) extends Token
 
-case class IntToken(int: Int, range: FilePosRange) extends Token
+case class IntToken(int: Long, range: FilePosRange) extends Token
 
 case class FloatToken(int: Float, range: FilePosRange) extends Token
 
@@ -68,7 +71,7 @@ private val escapedChars = Map('t' -> '\t', 'b' -> '\b', 'n' -> '\n', 'r' -> '\r
 private val escapedCharsInverted = escapedChars.map(_.swap)
 private val symbols = Set(":", "::", "...", "=>", "=")
 private val specialSymbols = "()[]{}.,;".toSet
-private val keywords = Set("let", "fn")
+private val keywords = Set("let", "fn", "if", "then", "else", "while", "true", "false")
 
 private val nextChar = State[LexerState, (Char, FilePos)](state => ((state.chars.head, state.pos), LexerState(state.chars.tail, state.pos + 1)))
 
@@ -115,7 +118,7 @@ private val nextElement: State[LexerState, LexerResult] = nextChar.flatMap {
     case iden => State.insert(Right(IdenToken(iden._1, iden._2)))
   }
   case c if isNumberStart(c._1) => next(isNumber, c).map(string => string._1.count(_ == '.') match {
-    case 0 => Right(IntToken(string._1.toInt, string._2))
+    case 0 => Right(IntToken(string._1.toLong, string._2))
     case 1 => Right(FloatToken(string._1.toFloat, string._2))
     case _ => Left(ErrorComponent(string._2, Some("Floating point literals cannot contain multiple decimal points")))
   })

@@ -1,5 +1,17 @@
+import core.{File, FilePos, Error, ErrorGroup}
+import gen.AsmGen
+import lex.{LexerState, tokenize}
+import syn.{GlobalStmt, ParserState, parseGlobalStmts}
+import sem.analyzeFile
+
 import java.io.PrintWriter
 import scala.languageFeature.implicitConversions
+
+private val ON_DEKSTOP = true
+
+private val PATH = if ON_DEKSTOP then "C:/Users/nisse/OneDrive/Skrivbord/Corn/TestCode" else "C:/Users/nisse/Desktop/Corn/TestCode"
+private val SOURCE_PATH = PATH + ".txt"
+private val ASSEMBLY_PATH = PATH + ".asm"
 
 def lexFile(filePath: String): ParserState = {
   val fileName = filePath.split('/').last.split('.').head
@@ -37,18 +49,17 @@ def compile(filePath: String): Unit = {
 
     printSeparator()
 
-    new PrintWriter("C:/Users/nisse/Desktop/Corn/TestCode.asm") {
-      write(CodeGen.toString)
+    new PrintWriter(ASSEMBLY_PATH) {
+      write(AsmGen.toString)
       close()
     }
   } catch {
     case error: (Error | ErrorGroup) =>
       printSeparator()
       print(error)
-      error.printStackTrace()
   }
 }
 
 @main def main(): Unit = {
-  compile("C:/Users/nisse/Desktop/Corn/TestCode.txt")
+  compile(SOURCE_PATH)
 }

@@ -1,3 +1,8 @@
+package core
+
+import lex.Token
+import sem.Datatype
+
 import scala.annotation.{tailrec, targetName, unused}
 import scala.collection.mutable
 import scala.math
@@ -86,11 +91,8 @@ object Error {
       ErrorComponent(range, Some(s"'$datatype' provided"))
     ), Some("Type mismatch"))
 
-  def datatypeExpected(found: Datatype, range: FilePosRange): Error =
-    Error(SEMANTIC, range.file, List(ErrorComponent(range, Some(s"Expression expected to compile-time evaluate to 'Type', found '$found'"))))
-
   def datatypeExpected(range: FilePosRange): Error =
-    Error(SEMANTIC, range.file, List(ErrorComponent(range, Some(s"Expression expected to compile-time evaluate to 'Type'"))))
+    Error(SEMANTIC, range.file, List(ErrorComponent(range, Some(s"Expected compile-time expression evaluating to value of type 'Type'"))))
 
   def todo(file: File): Error =
     Error(INTERNAL, file, List())
@@ -149,7 +151,7 @@ case class FilePosRange(start: Int, end: Int, file: File) {
     val endIndex = file.newlines.find(_ >= end).getOrElse(file.source.length)
 
     var lineNum = startLine + 1
-    val lineNumSpace = math.log10((endLine) + 2).ceil.toInt + 2
+    val lineNumSpace = math.log10(endLine + 2).ceil.toInt + 2
 
     val (code, under) = file.source.substring(startIndex, endIndex).zipWithIndex.flatMap {
       case ('\n', _) => ('\n', '\n') :: (s"${lineNum += 1; lineNum}:".padTo(lineNumSpace, ' ') + "| ").toList.zip((" " * lineNumSpace + "| ").toList)

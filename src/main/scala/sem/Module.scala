@@ -1,18 +1,23 @@
+package sem
+
+import core.*
+import gen.*
+
 import scala.collection.mutable
 
-abstract class AnalyzerVar {
+abstract class Var {
   def name: String
   def range: FilePosRange
   def datatype: Datatype
 }
 
-abstract class GlobalVar extends AnalyzerVar {
+abstract class GlobalVar extends Var {
   def constVal: Option[ConstVal]
 
-  lazy val label: Option[String] = if datatype.runtime then Some((constVal match {
-    case Some(value) => CodeGen.data(value)
-    case None => CodeGen.bss(datatype.size, datatype.align)
-  })._1) else None
+  lazy val label: Option[String] = if datatype.runtime then constVal match {
+    case Some(value) => Some(AsmGen.data(value)._1)
+    case None => Some(AsmGen.bss(datatype.size, datatype.align)._1)
+  } else None
 }
 
 class BuiltinGlobalVar(module: => Module, val name: String, value: ConstVal) extends GlobalVar {
@@ -24,20 +29,16 @@ class BuiltinGlobalVar(module: => Module, val name: String, value: ConstVal) ext
   def format(indentation: Int): String = s"${" " * indentation}builtin $name: $datatype = $value"
 }
 
-class UserGlobalVar(module: => Module, val name: String, init: => UserGlobalVarInit, patternNav: PatternNav, typeExpr: Option[Expr], val range: FilePosRange) extends GlobalVar {
+class UserGlobalVar(module: => Module, val name: String, init: => UserGlobalVarInit, patternNav: PatternNav, typeExpr: Option[syn.Expr], val range: FilePosRange) extends GlobalVar {
   lazy val datatype: Datatype = typeExpr.map(typeExpr => analyzeExpr(ExprParsingContext(module, None))(typeExpr).constDatatype).getOrElse(patternNav.datatype(init.analyzedExpr.returnType))
   lazy val constVal: Option[ConstVal] = init.analyzedExpr.constVal.map(patternNav.const)
 }
 
-class UserGlobalVarInit(module: => Module, expr: Expr, pattern: => AnalyzedPattern[UserGlobalVar]) {
-  lazy val analyzedExpr: AnalyzedExpr = analyzeExpr(ExprParsingContext(module, None))(expr)
-  lazy val analyzedPattern: AnalyzedPattern[UserGlobalVar] = pattern
+class UserGlobalVarInit(module: => Module, expr: syn.Expr, pattern: => Pattern[UserGlobalVar]) {
+  lazy val analyzedExpr: Expr = analyzeExpr(ExprParsingContext(module, None))(expr)
+  lazy val analyzedPattern: Pattern[UserGlobalVar] = pattern
 
   def typeCheck(): Unit = {
-    analyzedPattern
-    analyzedExpr
-    analyzedPattern.datatype
-    analyzedExpr.returnType
     if (analyzedPattern.datatype != analyzedExpr.returnType) throw Error.typeMismatch(analyzedExpr.returnType, analyzedPattern.datatype, analyzedExpr.range, analyzedPattern.range)
   }
 
@@ -54,11 +55,21 @@ abstract class Fun {
   def typeCheck(): Unit
 
   def constEval(args: List[ConstVal]): Option[ConstVal]
-  def generateCode: List[Instr]
+  def generateCode(): List[Instr]
   def generateInlineCode(ctx: ExprCodeGenContext): Boolean
 
   lazy val signature: FunDatatype = FunDatatype(argTypes, returnType)
-  lazy val label: String = CodeGen.function(generateCode)
+
+  private var labelInternal: Option[String] = None
+
+  def label: String = labelInternal match {
+    case Some(label) => label
+    case None =>
+      val label = AsmGen.functionLabel()
+      labelInternal = Some(label)
+      AsmGen.function(label, generateCode())
+      label
+  }
 }
 
 class BuiltinFun(val module: Module, val argTypes: List[Datatype], val returnType: Datatype, eval: List[ConstVal] => Option[ConstVal], generate: () => List[Instr], inlineGenerate: ExprCodeGenContext => Boolean = _ => false) extends Fun {
@@ -72,22 +83,22 @@ class BuiltinFun(val module: Module, val argTypes: List[Datatype], val returnTyp
 
   override def constEval(args: List[ConstVal]): Option[ConstVal] = eval(args)
 
-  override def generateCode: List[Instr] = generate()
+  override def generateCode(): List[Instr] = generate()
 
   override def generateInlineCode(ctx: ExprCodeGenContext): Boolean = inlineGenerate(ctx)
 }
 
-class UserFun(val module: Module, val name: String, parameters: List[Pattern], retTypeExpr: Option[Expr], expr: Expr, val range: FilePosRange) extends Fun {
-  lazy val (args: List[AnalyzedPattern[LocalVar]], params: Map[String, LocalVar]) = {
-    val (args, params) = parameters.map(parameter => AnalyzedPattern.map((pattern, patternNav) => new LocalVar(module, pattern.name, None, patternNav, pattern.datatype, pattern.range), parameter)).unzip
-    (args, AnalyzedPattern.verify(params.flatten))
+class UserFun(val module: Module, parameters: List[syn.Pattern], retTypeExpr: Option[syn.Expr], expr: syn.Expr, val range: FilePosRange) extends Fun {
+  lazy val (args: List[Pattern[LocalVar]], params: Map[String, LocalVar]) = {
+    val (args, params) = parameters.map(parameter => Pattern.map((pattern, patternNav) => new LocalVar(module, pattern.name, None, patternNav, pattern.datatype, pattern.range), parameter)).unzip
+    (args, Pattern.verify(params.flatten))
   }
 
-  lazy val analyzedExpr: AnalyzedExpr = analyzeExpr(new ExprParsingContext(module, Some(this)))(expr)
+  lazy val analyzedExpr: Expr = analyzeExpr(new ExprParsingContext(module, Some(this)))(expr)
 
   lazy val argTypes: List[Datatype] = args.map(_.datatype)
-  lazy val argNameToIndex: Map[String, Int] = args.zipWithIndex.flatMap{
-    case (AnalyzedVarPattern(patternVar, _), index) => List((patternVar.name, index))
+  lazy val argNameToIndex: Map[String, Int] = args.zipWithIndex.flatMap {
+    case (VarPattern(patternVar, _), index) => List((patternVar.name, index))
     case _ => List()
   }.toMap
   lazy val returnType: Datatype = retTypeExpr.map(retTypeExpr => analyzeExpr(new ExprParsingContext(module, None))(retTypeExpr).constDatatype).getOrElse(analyzedExpr.returnType)
@@ -102,14 +113,14 @@ class UserFun(val module: Module, val name: String, parameters: List[Pattern], r
     analyzedExpr.constEval(ctx)
   }
 
-  override def generateCode: List[Instr] = {
+  override def generateCode(): List[Instr] = {
     val ctx = new ExprCodeGenContext()
 
     params.values.foreach(ctx.add)
 
-    def iterateArgs(arg: AnalyzedPattern[LocalVar], offset: Int): Unit = arg match {
-      case AnalyzedVarPattern(patternVar, _) => patternVar.datatype.generateCopyCode(ctx, Reg.RSP + ctx.lookup(patternVar), Reg.RBP + offset)
-      case AnalyzedTuplePattern(elements, _) => elements.zip(Datatype.alignSequence(elements.map(_.datatype))._3.map(_ + offset)).foreach(iterateArgs.tupled)
+    def iterateArgs(arg: Pattern[LocalVar], offset: Int): Unit = arg match {
+      case VarPattern(patternVar, _) => patternVar.datatype.generateCopyCode(ctx, Reg.RSP + ctx.lookup(patternVar), Reg.RBP + offset)
+      case TuplePattern(elements, _) => elements.zip(Datatype.alignSequence(elements.map(_.datatype))._3.map(_ + offset)).foreach(iterateArgs.tupled)
     }
 
     args.accumulate(0) { case (arg, offset) =>

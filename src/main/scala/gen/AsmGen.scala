@@ -1,3 +1,7 @@
+package gen
+
+import sem.{ConstBool, ConstFunction, ConstInt, ConstTuple, ConstUnit, ConstVal}
+
 import scala.annotation.targetName
 import scala.collection.mutable
 
@@ -6,8 +10,8 @@ abstract class Instr {
   def comment: Option[String]
 
   def redundant: Boolean = this match {
-    case AsmImm(Asm.Add | Asm.Sub | Asm.Or | Asm.Xor, _, 0, _, _) => true
-    case AsmMemImm(Asm.Add | Asm.Sub | Asm.Or | Asm.Xor, _, 0, _, _) => true
+    case AsmImm(Asm.Add | Asm.Sub | Asm.Or | Asm.Xor, _, 0, None, _) => true
+    case AsmMemImm(Asm.Add | Asm.Sub | Asm.Or | Asm.Xor, _, 0, None, _) => true
     case Mov(dst, src, _, _) => dst == src
     case _ => false
   }
@@ -28,19 +32,23 @@ abstract class Instr {
     case StoreImm(address, imm, regSize, _, _) => ("mov", s"$regSize$address, $imm")
     case Lea(dst, address, _, _) => ("lea", s"$dst, $address")
     case DirJump(target, _, _) => ("jmp", s"$target")
-    case DirCondJump(target, flag, _, _) => (flag.jumpName, s"$target")
+    case DirCondJump(target, flag, _, _) => (s"j${flag.name}", s"$target")
     case IndJump(address, _, _) => ("jmp", s"$address")
     case DirCall(target, _, _) => ("call", s"$target")
     case IndRegCall(reg, _, _) => ("call", s"$reg")
     case IndCall(address, _, _) => ("call", s"qword$address")
+    case SetCond(reg, flag, _, _) => (s"set${flag.name}", s"${reg.byte}")
     case Push(reg, _, _) => ("push", s"$reg")
     case Pop(reg, _, _) => ("pop", s"$reg")
     case Ret(_, _) => ("ret", "")
+    case Nop(_, _) => ("", "")
   }
 
-  override def toString: String = {
+  override def toString: String = if (this.isInstanceOf[Nop]) {
+    s"${label.map(_ + ":\n").getOrElse("")}${comment.map(" " * 64 + "; " + _).getOrElse("")}"
+  } else {
     val (instr, operands) = format
-    s"${label.map(_ + ":\n").getOrElse("")}${" " * 8}${instr.padTo(8, ' ')}${comment.map(c => s"${operands.padTo(48, ' ')}; $c").getOrElse(operands)}\n"
+    s"${label.map(_ + ":\n").getOrElse("")}${" " * 8}${instr.padTo(8, ' ')}${comment.map(operands.padTo(48, ' ') + "; " + _).getOrElse(operands)}\n"
   }
 }
 
@@ -64,7 +72,7 @@ case class Mov(dst: Reg, src: Reg, label: Option[String] = None, comment: Option
 
 case class Load(dst: Reg, address: Address, regSize: RegSize = RegSize.QWord, label: Option[String] = None, comment: Option[String] = None) extends Instr
 
-case class LoadImm(dst: Reg, imm: Int, regSize: RegSize = RegSize.QWord, label: Option[String] = None, comment: Option[String] = None) extends Instr
+case class LoadImm(dst: Reg, imm: Long, regSize: RegSize = RegSize.QWord, label: Option[String] = None, comment: Option[String] = None) extends Instr
 
 case class Store(address: Address, src: Reg, regSize: RegSize = RegSize.QWord, label: Option[String] = None, comment: Option[String] = None) extends Instr
 
@@ -78,6 +86,8 @@ case class DirCondJump(target: String, flag: Flag, label: Option[String] = None,
 
 case class IndJump(address: Address, label: Option[String] = None, comment: Option[String] = None) extends Instr
 
+case class SetCond(dst: Reg, flag: Flag, label: Option[String] = None, comment: Option[String] = None) extends Instr
+
 case class DirCall(target: String, label: Option[String] = None, comment: Option[String] = None) extends Instr
 
 case class IndRegCall(reg: Reg, label: Option[String] = None, comment: Option[String] = None) extends Instr
@@ -89,6 +99,8 @@ case class Ret(label: Option[String] = None, comment: Option[String] = None) ext
 case class Push(reg: Reg, label: Option[String] = None, comment: Option[String] = None) extends Instr
 
 case class Pop(reg: Reg, label: Option[String] = None, comment: Option[String] = None) extends Instr
+
+case class Nop(label: Option[String] = None, comment: Option[String] = None) extends Instr
 
 abstract class Address {
   private def formatDis(dis: Int, label: Option[String]): String = label match {
@@ -222,23 +234,23 @@ enum RegSize(val size: Int, val string: String) {
   override def toString: String = string
 }
 
-enum Flag(val jumpName: String) {
-  case Overflow extends Flag("jo")
-  case NotOverflow extends Flag("jno")
-  case Sign extends Flag("js")
-  case NotSign extends Flag("jns")
-  case Zero extends Flag("jz")
-  case NotZero extends Flag("jnz")
-  case Below extends Flag("jb")
-  case AboveOrEqual extends Flag("jae")
-  case BelowOrEqual extends Flag("jbe")
-  case Above extends Flag("ja")
-  case Less extends Flag("jl")
-  case GreaterOrEqual extends Flag("jge")
-  case LessOrEqual extends Flag("jle")
-  case Greater extends Flag("jg")
-  case Parity extends Flag("jp")
-  case NotParity extends Flag("jnp")
+enum Flag(val name: String) {
+  case Overflow extends Flag("o")
+  case NotOverflow extends Flag("no")
+  case Sign extends Flag("s")
+  case NotSign extends Flag("ns")
+  case Zero extends Flag("z")
+  case NotZero extends Flag("nz")
+  case Below extends Flag("b")
+  case AboveOrEqual extends Flag("ae")
+  case BelowOrEqual extends Flag("be")
+  case Above extends Flag("a")
+  case Less extends Flag("l")
+  case GreaterOrEqual extends Flag("ge")
+  case LessOrEqual extends Flag("le")
+  case Greater extends Flag("g")
+  case Parity extends Flag("p")
+  case NotParity extends Flag("np")
 }
 
 enum Asm(val name: String) {
@@ -268,7 +280,7 @@ enum Asm(val name: String) {
   def apply(dst: Address, src: Int, label: Option[String], comment: Option[String]): AsmMemImm = AsmMemImm(this, dst, src, label, comment)
 }
 
-object CodeGen {
+object AsmGen {
   private val DEFINE_BYTE = "db".padTo(8, ' ')
   private val DEFINE_WORD = "dw".padTo(8, ' ')
   private val DEFINE_DWORD = "dd".padTo(8, ' ')
@@ -281,7 +293,7 @@ object CodeGen {
   private val labelGen = LabelGen('L')
   private val functionLabelGen = LabelGen('F')
 
-  private val codeBuilder = mutable.StringBuilder()
+  private val codeBuilder = mutable.Buffer[(String, List[Instr])]()
   private val mainBuilder = mutable.StringBuilder()
   private val kernelTableBuilder = mutable.StringBuilder()
   private val windowsFunctionNamesBuilder = mutable.StringBuilder()
@@ -290,12 +302,10 @@ object CodeGen {
 
   def label(): String = labelGen.next()
 
-  def function(instructions: List[Instr]): String = {
-    val label = functionLabelGen.next()
-    codeBuilder.append(label).append(":\n")
-    instructions.foreach(codeBuilder.append)
-    codeBuilder.append('\n')
-    label
+  def functionLabel(): String = functionLabelGen.next()
+
+  def function(label: String, instructions: List[Instr]): Unit = {
+    codeBuilder.append((label, instructions))
   }
 
   def main(instructions: Instr*): Unit = {
@@ -317,9 +327,13 @@ object CodeGen {
 
   private def mapConstVal(constVal: ConstVal): String = constVal match {
     case ConstUnit => ""
-    case ConstInt(int) => s"${DEFINE_QWORD}$int\n"
+    case ConstInt(int) => s"$DEFINE_QWORD$int\n"
+    case ConstBool(bool) => s"$DEFINE_BYTE$bool\n"
     case ConstTuple(elements) => elements.map(mapConstVal).mkString
-    case ConstFunction(function) => s"${DEFINE_QWORD}${function.label}\n"
+    case ConstFunction(function) => s"$DEFINE_QWORD${function.label}\n"
+  } match {
+    case "" => ""
+    case string => s"align ${constVal.datatype.align}\n" + string
   }
 
   def bss(size: Int, align: Int = 1): (String, String) = bssSection.append(s"$DEFINE_BYTE$size dup(?)", align)
@@ -334,7 +348,7 @@ object CodeGen {
 
   override def toString: String = mutable.StringBuilder()
     .append("format pe64 console\nentry start\n\n")
-    .append(s"section '.text' code readable executable\n\n${codeBuilder}start:\n$mainBuilder\n")
+    .append(s"section '.text' code readable executable\n\n${codeBuilder.map {case (label, instr) => s"$label:\n${instr.mkString}"}.mkString("\n")}start:\n$mainBuilder\n")
     .append(s"$bssSection")
     .append(s"$constSection")
     .append(s"$dataSection")
@@ -371,6 +385,6 @@ object CodeGen {
       (beforeLabel, afterLabel)
     }
 
-    override def toString: String = if count > 0 then s"${builder}\n" else ""
+    override def toString: String = if count > 0 then s"$builder\n" else ""
   }
 }
