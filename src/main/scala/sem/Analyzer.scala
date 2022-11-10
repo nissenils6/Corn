@@ -5,7 +5,7 @@ import gen.*
 
 import scala.collection.mutable
 
-def simpleOperator(module: => Module, name: String, compileTimeFunction: (Long, Long) => Long, asmOperation: (Address, Reg) => AsmMem): BuiltinGlobalVar =
+def simpleOperator(module: => Module, name: String, compileTimeFunction: (Long, Long) => Long, asmOperation: (Address, Reg) => SimpleOpMem): BuiltinGlobalVar =
   new BuiltinGlobalVar(module, name, ConstFunction(new BuiltinFun(module, List(IntDatatype, IntDatatype), IntDatatype,
     args => Some(ConstInt(compileTimeFunction(args.head.toInt, args(1).toInt))),
     () => List(
@@ -49,7 +49,7 @@ def divOperator(module: => Module, name: String, compileTimeFunction: (Long, Lon
     () => List(
       Load(Reg.RAX, Address(Reg.RBP)),
       Load(Reg.RCX, Reg.RBP + 8),
-      Asm.Xor(Reg.RDX, Reg.RDX),
+      Xor(Reg.RDX, Reg.RDX),
       Idiv(Reg.RCX),
       Store(Address(Reg.RBP), resultReg),
       Ret()
@@ -58,7 +58,7 @@ def divOperator(module: => Module, name: String, compileTimeFunction: (Long, Lon
       ctx.add(
         Load(Reg.RAX, Reg.RBP + ctx.secondaryOffset),
         Load(Reg.RCX, Reg.RBP + ctx.secondaryOffset + 8),
-        Asm.Xor(Reg.RDX, Reg.RDX),
+        Xor(Reg.RDX, Reg.RDX),
         Idiv(Reg.RCX),
         Store(Reg.RBP + ctx.secondaryOffset, resultReg)
       )
@@ -71,7 +71,7 @@ def comparisonOperator(module: => Module, name: String, compileTimeFunction: (Lo
     args => Some(ConstBool(compileTimeFunction(args.head.toInt, args(1).toInt))),
     () => List(
       Load(Reg.RAX, Address(Reg.RBP)),
-      Asm.Cmp(Reg.RAX, Reg.RBP + 8),
+      Cmp(Reg.RAX, Reg.RBP + 8),
       SetCond(Reg.RCX, flag),
       Store(Address(Reg.RBP), Reg.RCX, RegSize.Byte),
       Ret()
@@ -79,7 +79,7 @@ def comparisonOperator(module: => Module, name: String, compileTimeFunction: (Lo
     ctx => {
       ctx.add(
         Load(Reg.RAX, Reg.RBP + ctx.secondaryOffset),
-        Asm.Cmp(Reg.RAX, Reg.RBP + ctx.secondaryOffset + 8),
+        Cmp(Reg.RAX, Reg.RBP + ctx.secondaryOffset + 8),
         SetCond(Reg.RCX, flag),
         Store(Reg.RBP + ctx.secondaryOffset, Reg.RCX, RegSize.Byte)
       )
@@ -92,11 +92,11 @@ def builtinVars(module: => Module): List[GlobalVar] = List(
   new BuiltinGlobalVar(module, "Bool", ConstType(BoolDatatype)),
   new BuiltinGlobalVar(module, "Type", ConstType(TypeDatatype)),
 
-  simpleOperator(module, "+", _ + _, Asm.Add.apply),
-  simpleOperator(module, "-", _ - _, Asm.Sub.apply),
-  simpleOperator(module, "&", _ & _, Asm.And.apply),
-  simpleOperator(module, "|", _ | _, Asm.Or.apply),
-  simpleOperator(module, "^", _ ^ _, Asm.Xor.apply),
+  simpleOperator(module, "+", _ + _, Add.apply),
+  simpleOperator(module, "-", _ - _, Sub.apply),
+  simpleOperator(module, "&", _ & _, And.apply),
+  simpleOperator(module, "|", _ | _, Or.apply),
+  simpleOperator(module, "^", _ ^ _, Xor.apply),
 
   mulOperator(module),
   divOperator(module, "/", _ / _, Reg.RAX),
@@ -106,6 +106,8 @@ def builtinVars(module: => Module): List[GlobalVar] = List(
   comparisonOperator(module, "<", _ < _, Flag.Less),
   comparisonOperator(module, ">=", _ >= _, Flag.GreaterOrEqual),
   comparisonOperator(module, "<=", _ <= _, Flag.LessOrEqual),
+  comparisonOperator(module, "==", _ == _, Flag.Zero),
+  comparisonOperator(module, "!=", _ != _, Flag.NotZero),
 
   new BuiltinGlobalVar(module, "println", ConstFunction(new BuiltinFun(module, List(IntDatatype), UnitDatatype,
     _ => None,
@@ -121,40 +123,43 @@ def builtinVars(module: => Module): List[GlobalVar] = List(
       List(
         Load(Reg.RAX, Address(Reg.RBP)),
         Lea(Reg.RBX, Address(bufferEndLabel)),
-        Asm.Sub(Reg.RBX, 1),
+        Sub(Reg.RBX, 1),
         StoreImm(Address(Reg.RBX), 10, RegSize.Byte),
 
         Mov(Reg.RSI, Reg.RAX),
-        Asm.Cmp(Reg.RAX, 0),
+        Cmp(Reg.RAX, 0),
         DirCondJump(noNegLabel, Flag.GreaterOrEqual),
         Neg(Reg.RAX),
 
-        LoadImm(Reg.RCX, 10, RegSize.QWord, Some(noNegLabel)),
+        Label(noNegLabel),
+        LoadImm(Reg.RCX, 10, RegSize.QWord),
 
-        Asm.Xor(Reg.RDX, Reg.RDX, Some(loopLabel)),
+        Label(loopLabel),
+        Xor(Reg.RDX, Reg.RDX),
         Idiv(Reg.RCX),
-        Asm.Add(Reg.RDX, 48),
-        Asm.Sub(Reg.RBX, 1),
+        Add(Reg.RDX, 48),
+        Sub(Reg.RBX, 1),
         Store(Address(Reg.RBX), Reg.RDX, RegSize.Byte),
-        Asm.Cmp(Reg.RAX, 0),
+        Cmp(Reg.RAX, 0),
         DirCondJump(loopLabel, Flag.Greater),
 
-        Asm.Cmp(Reg.RSI, 0),
+        Cmp(Reg.RSI, 0),
         DirCondJump(noMinusLabel, Flag.GreaterOrEqual),
-        Asm.Sub(Reg.RBX, 1),
+        Sub(Reg.RBX, 1),
         StoreImm(Address(Reg.RBX), 45, RegSize.Byte),
 
-        Asm.Sub(Reg.RSP, 48, Some(noMinusLabel)),
+        Label(noMinusLabel),
+        Sub(Reg.RSP, 48),
         LoadImm(Reg.RCX, -11),
         IndCall(Address("GetStdHandle")),
         Mov(Reg.RCX, Reg.RAX),
         Mov(Reg.RDX, Reg.RBX),
         Lea(Reg.R8, Address(bufferEndLabel)),
-        Asm.Sub(Reg.R8, Reg.RBX),
+        Sub(Reg.R8, Reg.RBX),
         Lea(Reg.R9, Reg.RSP + 32),
         StoreImm(Reg.RSP + 32, 0),
         IndCall(Address("WriteFile")),
-        Asm.Add(Reg.RSP, 48),
+        Add(Reg.RSP, 48),
         Ret()
       )
     }
@@ -195,8 +200,8 @@ def analyzeFile(stmts: List[syn.GlobalStmt], file: File): Module = {
     Lea(Reg.RBP, Address(secondaryStack)),
     DirCall(initFunction),
     DirCall(module.vars("main").head.constVal.get.asInstanceOf[ConstFunction].function.label),
-    Asm.Sub(Reg.RSP, 56),
-    Asm.Xor(Reg.RCX, Reg.RCX),
+    Sub(Reg.RSP, 56),
+    Xor(Reg.RCX, Reg.RCX),
     IndCall(Address(AsmGen.windowsFunction("ExitProcess")))
   )
 

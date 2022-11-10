@@ -1,124 +1,109 @@
 package gen
 
-import sem.{ConstBool, ConstFunction, ConstInt, ConstTuple, ConstUnit, ConstVal}
+import sem.*
 
 import scala.annotation.targetName
 import scala.collection.mutable
 
 abstract class Instr {
-  def label: Option[String]
   def comment: Option[String]
 
   def redundant: Boolean = this match {
-    case AsmImm(Asm.Add | Asm.Sub | Asm.Or | Asm.Xor, _, 0, None, _) => true
-    case AsmMemImm(Asm.Add | Asm.Sub | Asm.Or | Asm.Xor, _, 0, None, _) => true
-    case Mov(dst, src, _, _) => dst == src
+    case SimpleOpImm(Add | Sub | Or | Xor, _, 0, _) => true
+    case SimpleOpMemImm(Add | Sub | Or | Xor, _, 0, _) => true
+    case Mov(dst, src, _) => dst == src
     case _ => false
   }
-
+  override def toString: String = withComment(this match {
+    case Label(label, _) => s"$label:"
+    case _ =>
+      val (instr, operands) = format
+      " " * 8 + instr.padTo(8, ' ') + operands
+  })
   def format: (String, String) = this match {
-    case AsmReg(op, dst, src, _, _) => (op.name, s"$dst, $src")
-    case AsmImm(op, dst, imm, _, _) => (op.name, s"$dst, $imm")
-    case AsmAddress(op, dst, src, _, _) => (op.name, s"$dst, $src")
-    case AsmMem(op, dst, src, _, _) => (op.name, s"$dst, $src")
-    case AsmMemImm(op, dst, imm, _, _) => (op.name, s"$dst, $imm")
-    case Neg(reg, _, _) => ("neg", s"$reg")
-    case Imul(dst, src, _, _) => ("imul", s"$dst, $src")
-    case Idiv(dst, _, _) => ("idiv", s"$dst")
-    case Mov(dst, src, _, _) => ("mov", s"$dst, $src")
-    case Load(dst, address, regSize, _, _) => ("mov", s"${dst(regSize)}, $address")
-    case LoadImm(dst, imm, regSize, _, _) => ("mov", s"${dst(regSize)}, $imm")
-    case Store(address, src, regSize, _, _) => ("mov", s"$regSize$address, ${src(regSize)}")
-    case StoreImm(address, imm, regSize, _, _) => ("mov", s"$regSize$address, $imm")
-    case Lea(dst, address, _, _) => ("lea", s"$dst, $address")
-    case DirJump(target, _, _) => ("jmp", s"$target")
-    case DirCondJump(target, flag, _, _) => (s"j${flag.name}", s"$target")
-    case IndJump(address, _, _) => ("jmp", s"$address")
-    case DirCall(target, _, _) => ("call", s"$target")
-    case IndRegCall(reg, _, _) => ("call", s"$reg")
-    case IndCall(address, _, _) => ("call", s"qword$address")
-    case SetCond(reg, flag, _, _) => (s"set${flag.name}", s"${reg.byte}")
-    case Push(reg, _, _) => ("push", s"$reg")
-    case Pop(reg, _, _) => ("pop", s"$reg")
-    case Ret(_, _) => ("ret", "")
-    case Nop(_, _) => ("", "")
+    case SimpleOpReg(op, dst, src, _) => (op.name, s"$dst, $src")
+    case SimpleOpImm(op, dst, imm, _) => (op.name, s"$dst, $imm")
+    case SimpleOpAddress(op, dst, src, _) => (op.name, s"$dst, $src")
+    case SimpleOpMem(op, dst, src, _) => (op.name, s"$dst, $src")
+    case SimpleOpMemImm(op, dst, imm, _) => (op.name, s"$dst, $imm")
+    case Neg(reg, _) => ("neg", s"$reg")
+    case Imul(dst, src, _) => ("imul", s"$dst, $src")
+    case Idiv(dst, _) => ("idiv", s"$dst")
+    case Mov(dst, src, _) => ("mov", s"$dst, $src")
+    case Load(dst, address, regSize, _) => ("mov", s"${dst(regSize)}, $address")
+    case LoadImm(dst, imm, regSize, _) => ("mov", s"${dst(regSize)}, $imm")
+    case Store(address, src, regSize, _) => ("mov", s"$regSize$address, ${src(regSize)}")
+    case StoreImm(address, imm, regSize, _) => ("mov", s"$regSize$address, $imm")
+    case Lea(dst, address, _) => ("lea", s"$dst, $address")
+    case DirJump(target, _) => ("jmp", s"$target")
+    case DirCondJump(target, flag, _) => (s"j${flag.name}", s"$target")
+    case IndJump(address, _) => ("jmp", s"$address")
+    case DirCall(target, _) => ("call", s"$target")
+    case IndRegCall(reg, _) => ("call", s"$reg")
+    case IndCall(address, _) => ("call", s"qword$address")
+    case SetCond(reg, flag, _) => (s"set${flag.name}", s"${reg.byte}")
+    case Push(reg, _) => ("push", s"$reg")
+    case Pop(reg, _) => ("pop", s"$reg")
+    case Ret(_) => ("ret", "")
+    case Label(_, _) => ("", "")
   }
-
-  override def toString: String = if (this.isInstanceOf[Nop]) {
-    s"${label.map(_ + ":\n").getOrElse("")}${comment.map(" " * 64 + "; " + _).getOrElse("")}"
-  } else {
-    val (instr, operands) = format
-    s"${label.map(_ + ":\n").getOrElse("")}${" " * 8}${instr.padTo(8, ' ')}${comment.map(operands.padTo(48, ' ') + "; " + _).getOrElse(operands)}\n"
+  def withComment(string: String): String = comment match {
+    case Some(comment) => string.padTo(' ', 64).mkString + comment + "\n"
+    case None => string + "\n"
   }
 }
 
-case class AsmReg(op: Asm, dst: Reg, src: Reg, label: Option[String] = None, comment: Option[String] = None) extends Instr
+case class SimpleOpReg(op: SimpleOp, dst: Reg, src: Reg, comment: Option[String] = None) extends Instr
 
-case class AsmImm(op: Asm, dst: Reg, src: Int, label: Option[String] = None, comment: Option[String] = None) extends Instr
+case class SimpleOpImm(op: SimpleOp, dst: Reg, src: Int, comment: Option[String] = None) extends Instr
 
-case class AsmAddress(op: Asm, dst: Reg, src: Address, label: Option[String] = None, comment: Option[String] = None) extends Instr
+case class SimpleOpAddress(op: SimpleOp, dst: Reg, src: Address, comment: Option[String] = None) extends Instr
 
-case class AsmMem(op: Asm, dst: Address, src: Reg, label: Option[String] = None, comment: Option[String] = None) extends Instr
+case class SimpleOpMem(op: SimpleOp, dst: Address, src: Reg, comment: Option[String] = None) extends Instr
 
-case class AsmMemImm(op: Asm, dst: Address, src: Int, label: Option[String] = None, comment: Option[String] = None) extends Instr
+case class SimpleOpMemImm(op: SimpleOp, dst: Address, src: Int, comment: Option[String] = None) extends Instr
 
-case class Neg(reg: Reg, label: Option[String] = None, comment: Option[String] = None) extends Instr
+case class Neg(reg: Reg, comment: Option[String] = None) extends Instr
 
-case class Imul(dst: Reg, src: Reg, label: Option[String] = None, comment: Option[String] = None) extends Instr
+case class Imul(dst: Reg, src: Reg, comment: Option[String] = None) extends Instr
 
-case class Idiv(src: Reg, label: Option[String] = None, comment: Option[String] = None) extends Instr
+case class Idiv(src: Reg, comment: Option[String] = None) extends Instr
 
-case class Mov(dst: Reg, src: Reg, label: Option[String] = None, comment: Option[String] = None) extends Instr
+case class Mov(dst: Reg, src: Reg, comment: Option[String] = None) extends Instr
 
-case class Load(dst: Reg, address: Address, regSize: RegSize = RegSize.QWord, label: Option[String] = None, comment: Option[String] = None) extends Instr
+case class Load(dst: Reg, address: Address, regSize: RegSize = RegSize.QWord, comment: Option[String] = None) extends Instr
 
-case class LoadImm(dst: Reg, imm: Long, regSize: RegSize = RegSize.QWord, label: Option[String] = None, comment: Option[String] = None) extends Instr
+case class LoadImm(dst: Reg, imm: Long, regSize: RegSize = RegSize.QWord, comment: Option[String] = None) extends Instr
 
-case class Store(address: Address, src: Reg, regSize: RegSize = RegSize.QWord, label: Option[String] = None, comment: Option[String] = None) extends Instr
+case class Store(address: Address, src: Reg, regSize: RegSize = RegSize.QWord, comment: Option[String] = None) extends Instr
 
-case class StoreImm(address: Address, imm: Int, regSize: RegSize = RegSize.QWord, label: Option[String] = None, comment: Option[String] = None) extends Instr
+case class StoreImm(address: Address, imm: Int, regSize: RegSize = RegSize.QWord, comment: Option[String] = None) extends Instr
 
-case class Lea(dst: Reg, address: Address, label: Option[String] = None, comment: Option[String] = None) extends Instr
+case class Lea(dst: Reg, address: Address, comment: Option[String] = None) extends Instr
 
-case class DirJump(target: String, label: Option[String] = None, comment: Option[String] = None) extends Instr
+case class DirJump(target: String, comment: Option[String] = None) extends Instr
 
-case class DirCondJump(target: String, flag: Flag, label: Option[String] = None, comment: Option[String] = None) extends Instr
+case class DirCondJump(target: String, flag: Flag, comment: Option[String] = None) extends Instr
 
-case class IndJump(address: Address, label: Option[String] = None, comment: Option[String] = None) extends Instr
+case class IndJump(address: Address, comment: Option[String] = None) extends Instr
 
-case class SetCond(dst: Reg, flag: Flag, label: Option[String] = None, comment: Option[String] = None) extends Instr
+case class SetCond(dst: Reg, flag: Flag, comment: Option[String] = None) extends Instr
 
-case class DirCall(target: String, label: Option[String] = None, comment: Option[String] = None) extends Instr
+case class DirCall(target: String, comment: Option[String] = None) extends Instr
 
-case class IndRegCall(reg: Reg, label: Option[String] = None, comment: Option[String] = None) extends Instr
+case class IndRegCall(reg: Reg, comment: Option[String] = None) extends Instr
 
-case class IndCall(address: Address, label: Option[String] = None, comment: Option[String] = None) extends Instr
+case class IndCall(address: Address, comment: Option[String] = None) extends Instr
 
-case class Ret(label: Option[String] = None, comment: Option[String] = None) extends Instr
+case class Ret(comment: Option[String] = None) extends Instr
 
-case class Push(reg: Reg, label: Option[String] = None, comment: Option[String] = None) extends Instr
+case class Push(reg: Reg, comment: Option[String] = None) extends Instr
 
-case class Pop(reg: Reg, label: Option[String] = None, comment: Option[String] = None) extends Instr
+case class Pop(reg: Reg, comment: Option[String] = None) extends Instr
 
-case class Nop(label: Option[String] = None, comment: Option[String] = None) extends Instr
+case class Label(label: String, comment: Option[String] = None) extends Instr
 
 abstract class Address {
-  private def formatDis(dis: Int, label: Option[String]): String = label match {
-    case Some(label) if dis > 0 => s"$label + $dis"
-    case Some(label) if dis < 0 => s"$label - ${-dis}"
-    case Some(label) => s"$label"
-    case None => s"$dis"
-  }
-
-  private def formatDisSuffix(dis: Int, label: Option[String]): String = label match {
-    case Some(label) if dis > 0 => s" + $label + $dis"
-    case Some(label) if dis < 0 => s" + $label - ${-dis}"
-    case Some(label) => s" + $label"
-    case None if dis > 0 => s" + $dis"
-    case None if dis < 0 => s" - ${-dis}"
-    case None => ""
-  }
-
   override def toString: String = this match {
     case Dis(dis, label) => s"[${formatDis(dis, label)}]"
     case Base(base) => s"[$base]"
@@ -127,7 +112,20 @@ abstract class Address {
     case IndexDis(index, scale, dis, label) => s"[$index * $scale${formatDisSuffix(dis, label)}]"
     case BaseIndexDis(base, index, scale, dis, label) => s"[$base + $index * $scale${formatDisSuffix(dis, label)}]"
   }
-
+  private def formatDis(dis: Int, label: Option[String]): String = label match {
+    case Some(label) if dis > 0 => s"$label + $dis"
+    case Some(label) if dis < 0 => s"$label - ${-dis}"
+    case Some(label) => s"$label"
+    case None => s"$dis"
+  }
+  private def formatDisSuffix(dis: Int, label: Option[String]): String = label match {
+    case Some(label) if dis > 0 => s" + $label + $dis"
+    case Some(label) if dis < 0 => s" + $label - ${-dis}"
+    case Some(label) => s" + $label"
+    case None if dis > 0 => s" + $dis"
+    case None if dis < 0 => s" - ${-dis}"
+    case None => ""
+  }
   def +(int: Int): Address = this match {
     case dis: Dis => dis + int
     case base: Base => base + int
@@ -253,32 +251,25 @@ enum Flag(val name: String) {
   case NotParity extends Flag("np")
 }
 
-enum Asm(val name: String) {
-  case Add extends Asm("add")
-  case Sub extends Asm("sub")
-  case And extends Asm("and")
-  case Or extends Asm("or")
-  case Xor extends Asm("xor")
-  case Cmp extends Asm("cmp")
-
-  def apply(dst: Reg, src: Reg): AsmReg = AsmReg(this, dst, src, None, None)
-  def apply(dst: Reg, src: Int): AsmImm = AsmImm(this, dst, src, None, None)
-  def apply(dst: Reg, src: Address): AsmAddress = AsmAddress(this, dst, src, None, None)
-  def apply(dst: Address, src: Reg): AsmMem = AsmMem(this, dst, src, None, None)
-  def apply(dst: Address, src: Int): AsmMemImm = AsmMemImm(this, dst, src, None, None)
-
-  def apply(dst: Reg, src: Reg, label: Option[String]): AsmReg = AsmReg(this, dst, src, label, None)
-  def apply(dst: Reg, src: Int, label: Option[String]): AsmImm = AsmImm(this, dst, src, label, None)
-  def apply(dst: Reg, src: Address, label: Option[String]): AsmAddress = AsmAddress(this, dst, src, label, None)
-  def apply(dst: Address, src: Reg, label: Option[String]): AsmMem = AsmMem(this, dst, src, label, None)
-  def apply(dst: Address, src: Int, label: Option[String]): AsmMemImm = AsmMemImm(this, dst, src, label, None)
-
-  def apply(dst: Reg, src: Reg, label: Option[String], comment: Option[String]): AsmReg = AsmReg(this, dst, src, label, comment)
-  def apply(dst: Reg, src: Int, label: Option[String], comment: Option[String]): AsmImm = AsmImm(this, dst, src, label, comment)
-  def apply(dst: Reg, src: Address, label: Option[String], comment: Option[String]): AsmAddress = AsmAddress(this, dst, src, label, comment)
-  def apply(dst: Address, src: Reg, label: Option[String], comment: Option[String]): AsmMem = AsmMem(this, dst, src, label, comment)
-  def apply(dst: Address, src: Int, label: Option[String], comment: Option[String]): AsmMemImm = AsmMemImm(this, dst, src, label, comment)
+abstract class SimpleOp(val name: String) {
+  def apply(dst: Reg, src: Reg): SimpleOpReg = SimpleOpReg(this, dst, src, None)
+  def apply(dst: Reg, src: Int): SimpleOpImm = SimpleOpImm(this, dst, src, None)
+  def apply(dst: Reg, src: Address): SimpleOpAddress = SimpleOpAddress(this, dst, src, None)
+  def apply(dst: Address, src: Reg): SimpleOpMem = SimpleOpMem(this, dst, src, None)
+  def apply(dst: Address, src: Int): SimpleOpMemImm = SimpleOpMemImm(this, dst, src, None)
 }
+
+case object Add extends SimpleOp("add")
+
+case object Sub extends SimpleOp("sub")
+
+case object And extends SimpleOp("and")
+
+case object Or extends SimpleOp("or")
+
+case object Xor extends SimpleOp("xor")
+
+case object Cmp extends SimpleOp("cmp")
 
 object AsmGen {
   private val DEFINE_BYTE = "db".padTo(8, ' ')
@@ -324,6 +315,15 @@ object AsmGen {
     windowsFunctionNamesBuilder.append(" " * 8).append(s"${DEFINE_BYTE}0, 0, '$functionName', 0\n")
     functionName
   }
+  def bss(size: Int, align: Int = 1): (String, String) = bssSection.append(s"$DEFINE_BYTE$size dup(?)", align)
+
+  def constBytes(data: List[Int]): (String, String) = constSection.append(s"$DEFINE_BYTE${data.map(b => s"$b")}", 1)
+  def constQWords(data: List[Long]): (String, String) = constSection.append(s"$DEFINE_QWORD${data.map(l => s"$l")}", 8)
+  def const(constVal: ConstVal): (String, String) = constSection.append(mapConstVal(constVal), constVal.datatype.align)
+
+  def dataBytes(data: List[Int]): (String, String) = dataSection.append(s"$DEFINE_BYTE${data.map(b => s"$b")}", 1)
+  def dataQWords(data: List[Long]): (String, String) = dataSection.append(s"$DEFINE_QWORD${data.map(l => s"$l")}", 8)
+  def data(constVal: ConstVal): (String, String) = dataSection.append(mapConstVal(constVal), constVal.datatype.align)
 
   private def mapConstVal(constVal: ConstVal): String = constVal match {
     case ConstUnit => ""
@@ -336,19 +336,9 @@ object AsmGen {
     case string => s"align ${constVal.datatype.align}\n" + string
   }
 
-  def bss(size: Int, align: Int = 1): (String, String) = bssSection.append(s"$DEFINE_BYTE$size dup(?)", align)
-
-  def constBytes(data: List[Int]): (String, String) = constSection.append(s"$DEFINE_BYTE${data.map(b => s"$b")}", 1)
-  def constQWords(data: List[Long]): (String, String) = constSection.append(s"$DEFINE_QWORD${data.map(l => s"$l")}", 8)
-  def const(constVal: ConstVal): (String, String) = constSection.append(mapConstVal(constVal), constVal.datatype.align)
-
-  def dataBytes(data: List[Int]): (String, String) = dataSection.append(s"$DEFINE_BYTE${data.map(b => s"$b")}", 1)
-  def dataQWords(data: List[Long]): (String, String) = dataSection.append(s"$DEFINE_QWORD${data.map(l => s"$l")}", 8)
-  def data(constVal: ConstVal): (String, String) = dataSection.append(mapConstVal(constVal), constVal.datatype.align)
-
   override def toString: String = mutable.StringBuilder()
     .append("format pe64 console\nentry start\n\n")
-    .append(s"section '.text' code readable executable\n\n${codeBuilder.map {case (label, instr) => s"$label:\n${instr.mkString}"}.mkString("\n")}start:\n$mainBuilder\n")
+    .append(s"section '.text' code readable executable\n\n${codeBuilder.map { case (label, instr) => s"$label:\n${instr.mkString}" }.mkString("\n")}start:\n$mainBuilder\n")
     .append(s"$bssSection")
     .append(s"$constSection")
     .append(s"$dataSection")

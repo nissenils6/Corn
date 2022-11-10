@@ -76,11 +76,11 @@ abstract class Expr() {
           if (!function.generateInlineCode(ctx)) {
             ctx.secondaryOffset = afterArgOffset
             ctx.add(
-              Asm.Sub(Reg.RSP, -(ctx.offset - 8)),
-              Asm.Add(Reg.RBP, argOffset),
+              Sub(Reg.RSP, -(ctx.offset - 8)),
+              Add(Reg.RBP, argOffset),
               DirCall(function.label),
-              Asm.Sub(Reg.RBP, argOffset),
-              Asm.Add(Reg.RSP, -(ctx.offset - 8))
+              Sub(Reg.RBP, argOffset),
+              Add(Reg.RSP, -(ctx.offset - 8))
             )
           }
 
@@ -102,11 +102,11 @@ abstract class Expr() {
 
           ctx.add(
             Load(Reg.RAX, Reg.RSP + (ctx.offset - 8)),
-            Asm.Sub(Reg.RSP, -(ctx.offset - 8)),
-            Asm.Add(Reg.RBP, argOffset),
+            Sub(Reg.RSP, -(ctx.offset - 8)),
+            Add(Reg.RBP, argOffset),
             IndRegCall(Reg.RAX),
-            Asm.Sub(Reg.RBP, argOffset),
-            Asm.Add(Reg.RSP, -(ctx.offset - 8))
+            Sub(Reg.RBP, argOffset),
+            Add(Reg.RSP, -(ctx.offset - 8))
           )
           ctx.secondaryOffset = argOffset + signature.returnType.size.roundUp(8)
       }
@@ -174,9 +174,9 @@ abstract class Expr() {
         val endLabel = AsmGen.label()
 
         ctx.add(
-          Asm.Xor(Reg.RAX, Reg.RAX),
+          Xor(Reg.RAX, Reg.RAX),
           Load(Reg.RAX, Reg.RBP + ctx.secondaryOffset, RegSize.Byte),
-          Asm.Cmp(Reg.RAX, 0),
+          Cmp(Reg.RAX, 0),
           DirCondJump(elseLabel, Flag.Zero)
         )
 
@@ -185,12 +185,12 @@ abstract class Expr() {
 
         ctx.add(
           DirJump(endLabel),
-          Nop(Some(elseLabel))
+          Label(elseLabel)
         )
 
         elseBlock.generateCode(ctx)
 
-        ctx.add(Nop(Some(endLabel)))
+        ctx.add(Label(endLabel))
     }
   }
 
