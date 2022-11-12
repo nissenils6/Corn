@@ -8,7 +8,7 @@ abstract class Pattern[T <: Var] {
 
   lazy val datatype: Datatype = this match {
     case VarPattern(patternVar, _) => patternVar.datatype
-    case TuplePattern(elements, _) => TupleDatatype(elements.map(_.datatype))
+    case TuplePattern(elements, _) => TupleDatatype(elements.map(_.datatype), false)
   }
 
   def format(indentation: Int): String = this match {

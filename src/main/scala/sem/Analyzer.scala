@@ -6,7 +6,7 @@ import gen.*
 import scala.collection.mutable
 
 def simpleOperator(module: => Module, name: String, compileTimeFunction: (Long, Long) => Long, asmOperation: (Address, Reg) => SimpleOpMem): BuiltinGlobalVar =
-  new BuiltinGlobalVar(module, name, ConstFunction(new BuiltinFun(module, List(IntDatatype, IntDatatype), IntDatatype,
+  new BuiltinGlobalVar(module, name, ConstFunction(new BuiltinFun(module, List(IntDatatype(false), IntDatatype(false)), IntDatatype(false),
     args => Some(ConstInt(compileTimeFunction(args.head.toInt, args(1).toInt))),
     () => List(
       Load(Reg.RAX, Reg.RBP + 8),
@@ -23,7 +23,7 @@ def simpleOperator(module: => Module, name: String, compileTimeFunction: (Long, 
   )))
 
 def mulOperator(module: => Module): BuiltinGlobalVar =
-  new BuiltinGlobalVar(module, "*", ConstFunction(new BuiltinFun(module, List(IntDatatype, IntDatatype), IntDatatype,
+  new BuiltinGlobalVar(module, "*", ConstFunction(new BuiltinFun(module, List(IntDatatype(false), IntDatatype(false)), IntDatatype(false),
     args => Some(ConstInt(args.head.toInt * args(1).toInt)),
     () => List(
       Load(Reg.RAX, Address(Reg.RBP)),
@@ -44,7 +44,7 @@ def mulOperator(module: => Module): BuiltinGlobalVar =
   )))
 
 def divOperator(module: => Module, name: String, compileTimeFunction: (Long, Long) => Long, resultReg: Reg): BuiltinGlobalVar =
-  new BuiltinGlobalVar(module, name, ConstFunction(new BuiltinFun(module, List(IntDatatype, IntDatatype), IntDatatype,
+  new BuiltinGlobalVar(module, name, ConstFunction(new BuiltinFun(module, List(IntDatatype(false), IntDatatype(false)), IntDatatype(false),
     args => Some(ConstInt(compileTimeFunction(args.head.toInt, args(1).toInt))),
     () => List(
       Load(Reg.RAX, Address(Reg.RBP)),
@@ -67,7 +67,7 @@ def divOperator(module: => Module, name: String, compileTimeFunction: (Long, Lon
   )))
 
 def comparisonOperator(module: => Module, name: String, compileTimeFunction: (Long, Long) => Boolean, flag: Flag): BuiltinGlobalVar =
-  new BuiltinGlobalVar(module, name, ConstFunction(new BuiltinFun(module, List(IntDatatype, IntDatatype), BoolDatatype,
+  new BuiltinGlobalVar(module, name, ConstFunction(new BuiltinFun(module, List(IntDatatype(false), IntDatatype(false)), BoolDatatype(false),
     args => Some(ConstBool(compileTimeFunction(args.head.toInt, args(1).toInt))),
     () => List(
       Load(Reg.RAX, Address(Reg.RBP)),
@@ -88,9 +88,9 @@ def comparisonOperator(module: => Module, name: String, compileTimeFunction: (Lo
   )))
 
 def builtinVars(module: => Module): List[GlobalVar] = List(
-  new BuiltinGlobalVar(module, "Int", ConstType(IntDatatype)),
-  new BuiltinGlobalVar(module, "Bool", ConstType(BoolDatatype)),
-  new BuiltinGlobalVar(module, "Type", ConstType(TypeDatatype)),
+  new BuiltinGlobalVar(module, "Int", ConstType(IntDatatype(false))),
+  new BuiltinGlobalVar(module, "Bool", ConstType(BoolDatatype(false))),
+  new BuiltinGlobalVar(module, "Type", ConstType(TypeDatatype(false))),
 
   simpleOperator(module, "+", _ + _, Add.apply),
   simpleOperator(module, "-", _ - _, Sub.apply),
@@ -109,7 +109,7 @@ def builtinVars(module: => Module): List[GlobalVar] = List(
   comparisonOperator(module, "==", _ == _, Flag.Zero),
   comparisonOperator(module, "!=", _ != _, Flag.NotZero),
 
-  new BuiltinGlobalVar(module, "println", ConstFunction(new BuiltinFun(module, List(IntDatatype), UnitDatatype,
+  new BuiltinGlobalVar(module, "println", ConstFunction(new BuiltinFun(module, List(IntDatatype(false)), UnitDatatype(false),
     _ => None,
     () => {
       val noNegLabel = AsmGen.label()

@@ -8,20 +8,24 @@ import scala.collection.immutable.List
 import scala.collection.mutable
 
 abstract class Expr() {
+  def range: FilePosRange
+
   lazy val returnType: Datatype = this match {
     case CallExpr(function, _, _) => function.returnType.asInstanceOf[FunDatatype].returnType
     case GlobalVarRefExpr(globalVar, _) => globalVar.datatype
     case LocalVarRefExpr(localVar, _) => localVar.datatype
-    case IntExpr(_, _) => IntDatatype
-    case BoolExpr(_, _) => BoolDatatype
-    case TupleExpr(elements, _) => TupleDatatype(elements.map(_.returnType))
+    case IntExpr(_, _) => IntDatatype(false)
+    case BoolExpr(_, _) => BoolDatatype(false)
+    case TupleExpr(elements, _) => TupleDatatype(elements.map(_.returnType), false)
     case BlockExpr(_, lastExpr, _, _) => lastExpr.returnType
-    case UnitExpr(_) => UnitDatatype
+    case UnitExpr(_) => UnitDatatype(false)
     case LetExpr(_, expr, _) => expr.returnType
     case FunExpr(fun, _) => fun.signature
-    case FunTypeExpr(_, _, _) => TypeDatatype
+    case FunTypeExpr(_, _, _) => TypeDatatype(false)
     case IfExpr(_, ifBlock, _, _) => ifBlock.returnType
+    case MutExpr(_, _, _) => TypeDatatype(false)
   }
+
   lazy val constVal: Option[ConstVal] = this match {
     case CallExpr(function, args, _) => (for {
       fun <- function.constVal
@@ -35,14 +39,19 @@ abstract class Expr() {
     case UnitExpr(_) => Some(ConstUnit)
     case LetExpr(_, expr, _) => expr.constVal
     case FunExpr(fun, _) => Some(ConstFunction(fun))
-    case FunTypeExpr(parameters, returnType, _) => Some(ConstType(FunDatatype(parameters.map(_.constDatatype), returnType.constDatatype)))
+    case FunTypeExpr(parameters, returnType, _) => Some(ConstType(FunDatatype(parameters.map(_.constDatatype), returnType.constDatatype, false)))
+    case MutExpr(expr, mutable, _) => for {
+      constType <- expr.constVal
+      datatype <- constType.toType
+    } yield ConstType(datatype.withMut(mutable))
     case _ => constEval(ExprConstEvalContext())
   }
-  lazy val constDatatype: Datatype = constVal.flatMap(_.asType) match {
+
+  lazy val constDatatype: Datatype = constVal.flatMap(_.toType) match {
     case Some(datatype) => datatype
     case None => throw Error.datatypeExpected(range)
   }
-  def range: FilePosRange
+
   def constEval(ctx: ExprConstEvalContext): Option[ConstVal] = this match {
     case CallExpr(function, args, _) => (for {
       fun <- function.constEval(ctx)
@@ -57,8 +66,12 @@ abstract class Expr() {
     case UnitExpr(_) => Some(ConstUnit)
     case LetExpr(pattern, expr, _) => expr.constEval(ctx).map(value => ctx.add(pattern, value))
     case FunExpr(fun, _) => Some(ConstFunction(fun))
-    case FunTypeExpr(parameters, returnType, _) => Some(ConstType(FunDatatype(parameters.map(_.constDatatype), returnType.constDatatype)))
+    case FunTypeExpr(parameters, returnType, _) => Some(ConstType(FunDatatype(parameters.map(_.constDatatype), returnType.constDatatype, false)))
     case IfExpr(condition, ifBlock, elseBlock, _) => condition.constEval(ctx).flatMap(evaluatedCondition => if evaluatedCondition.toBool then ifBlock.constEval(ctx) else elseBlock.constEval(ctx))
+    case MutExpr(expr, mutable, _) => for {
+      constType <- expr.constEval(ctx)
+      datatype <- constType.toType
+    } yield ConstType(datatype.withMut(mutable))
   }
 
   def generateCode(ctx: ExprCodeGenContext, topLevel: Boolean = false): Unit = constVal match {
@@ -191,6 +204,7 @@ abstract class Expr() {
         elseBlock.generateCode(ctx)
 
         ctx.add(Label(endLabel))
+      case MutExpr(_, _, range) => Error.todo("", range)
     }
   }
 
@@ -207,6 +221,7 @@ abstract class Expr() {
     case FunExpr(fun, _) => s"${fun.format(indentation)}"
     case FunTypeExpr(parameters, returnType, _) => s"(${parameters.map(_.format(indentation)).mkString(", ")}) => ${returnType.format(indentation)}"
     case IfExpr(condition, ifBlock, elseBlock, _) => s"if ${condition.format(indentation)} then ${ifBlock.format(indentation)} else ${elseBlock.format(indentation)}"
+    case MutExpr(expr, mutable, _) => s"${if mutable then "mut" else "const"} ${expr.format(indentation)}"
   }
 }
 
@@ -234,12 +249,14 @@ case class FunTypeExpr(parameters: List[Expr], returnTypeExpr: Expr, range: File
 
 case class IfExpr(condition: Expr, ifBlock: Expr, elseBlock: Expr, range: FilePosRange) extends Expr
 
+case class MutExpr(expr: Expr, mutable: Boolean, range: FilePosRange) extends Expr
+
 class LocalVar(val module: Module, val name: String, letExpr: => Option[LetExpr], patternNav: PatternNav, typeExpr: Option[syn.Expr], val range: FilePosRange) extends Var {
   lazy val datatype: Datatype = typeExpr.map(typeExpr => analyzeExpr(ExprParsingContext(module, None))(typeExpr).constDatatype).getOrElse(patternNav.datatype(letExpr match {
     case Some(letExpr) => letExpr.expr.returnType
     case None => throw Error.todo(module.file)
   }))
-  lazy val constVal: Option[ConstVal] = letExpr.flatMap(_.constVal.map(patternNav.const))
+  lazy val constVal: Option[ConstVal] = if datatype.mutable then None else letExpr.flatMap(_.constVal.map(patternNav.const))
 }
 
 abstract class OverloadLayer {
@@ -248,7 +265,7 @@ abstract class OverloadLayer {
 
 case class LocalOverloadLayer(localVar: LocalVar) extends OverloadLayer {
   override def apply(funRange: FilePosRange, posArgs: List[Expr], keywordArgs: List[(String, Expr)]): Option[(Var, List[Expr])] = (posArgs, keywordArgs, localVar.datatype) match {
-    case (posArgs, List(), funDatatype: FunDatatype) if funDatatype.params == posArgs.map(_.returnType) => Some((localVar, posArgs))
+    case (posArgs, List(), funDatatype: FunDatatype) if funDatatype.params.zip(posArgs.map(_.returnType)).forall(_ ~= _) => Some((localVar, posArgs))
     case _ => None
   }
 }
@@ -271,7 +288,7 @@ case class GlobalOverloadLayer(globalVars: List[GlobalVar]) extends OverloadLaye
         if (multipleArgs.nonEmpty) throw Error.todo(funRange.file)
         val argsMap = args.map(_._1).toSet
         if (Range(0, function.argTypes.length).forall(argsMap.contains)) {
-          Some(args.toList.sortWith((t1, t2) => t1._1 < t2._1).map(_._2)).filter(function.argTypes == _.map(_.returnType)).map((globalVar, _))
+          Some(args.toList.sortWith((t1, t2) => t1._1 < t2._1).map(_._2)).filter(params => function.argTypes.zip(params.map(_.returnType)).forall(_ ~= _)).map((globalVar, _))
         } else
           None
       case (posArgs, List(), _) => globalVar.datatype match {
@@ -319,11 +336,14 @@ class ExprParsingContext(val module: Module, val fun: Option[UserFun]) {
 
     rec(vars)
   }
+
   def add(localVars: List[LocalVar]): Unit = localVars.foreach(add)
+
   def add(localVar: LocalVar): LocalVar = {
     vars = localVar :: vars
     localVar
   }
+
   def scope[T](f: => T): (T, List[LocalVar]) = {
     val length = vars.length
     val value = f
@@ -378,8 +398,11 @@ class ExprCodeGenContext {
     case VarPattern(patternVar, _) => add(patternVar)
     case TuplePattern(elements, _) => elements.foreach(add)
   }
+
   def add(instr: Instr*): Unit = instr.foreach(add)
+
   def add(instr: Instr): Unit = if instr.redundant then () else instructions.append(instr)
+
   def add(instr: List[Instr]): Unit = instr.foreach(add)
 
   def scope[T](f: => T): T = {
@@ -408,7 +431,7 @@ def analyzeExpr(ctx: ExprParsingContext)(expr: syn.Expr): Expr = expr match {
   case syn.CallExpr(function, posArgs, List(), range) =>
     val analyzedFunExpr = analyzeExpr(ctx)(function)
     analyzedFunExpr.returnType match {
-      case FunDatatype(params, _) =>
+      case FunDatatype(params, _, _) =>
         if (params.length != posArgs.length) throw Error.todo(range.file)
         val analyzedArgs = posArgs.map(analyzeExpr(ctx))
         if (!params.zip(analyzedArgs.map(_.returnType)).forall(t => t._1 == t._2)) throw Error.todo(range)
@@ -434,7 +457,7 @@ def analyzeExpr(ctx: ExprParsingContext)(expr: syn.Expr): Expr = expr match {
   case syn.LetExpr(pattern, expr, range) =>
     lazy val analyzedExpr = analyzeExpr(ctx)(expr)
     lazy val (analyzedPattern: Pattern[LocalVar], vars: List[LocalVar]) = Pattern.map((pattern, patternNav) => new LocalVar(ctx.module, pattern.name, Some(letExpr), patternNav, pattern.datatype, pattern.range), pattern)
-    if (analyzedPattern.datatype != analyzedExpr.returnType) throw Error.typeMismatch(analyzedExpr.returnType, analyzedPattern.datatype, analyzedExpr.range, analyzedPattern.range)
+    if (analyzedPattern.datatype !~= analyzedExpr.returnType) throw Error.typeMismatch(analyzedExpr.returnType, analyzedPattern.datatype, analyzedExpr.range, analyzedPattern.range)
     lazy val letExpr = LetExpr(analyzedPattern, analyzedExpr, range)
     ctx.add(vars)
     letExpr
@@ -442,12 +465,16 @@ def analyzeExpr(ctx: ExprParsingContext)(expr: syn.Expr): Expr = expr match {
   case syn.FunTypeExpr(parameters, returnType, range) => FunTypeExpr(parameters.map(analyzeExpr(ctx)), analyzeExpr(ctx)(returnType), range)
   case syn.IfExpr(condition, ifBlock, elseBlock, range) =>
     val analyzedCondition = analyzeExpr(ctx)(condition)
-    if (analyzedCondition.returnType != BoolDatatype) throw Error(Error.SEMANTIC, range.file, List(ErrorComponent(analyzedCondition.range, Some(s"Expected 'Bool', found '${analyzedCondition.returnType}'"))))
+    if (analyzedCondition.returnType !~= BoolDatatype(false)) throw Error(Error.SEMANTIC, range.file, List(ErrorComponent(analyzedCondition.range, Some(s"Expected 'Bool', found '${analyzedCondition.returnType}'"))))
     val analyzedIfBlock = analyzeExpr(ctx)(ifBlock)
     val analyzedElseBlock = analyzeExpr(ctx)(elseBlock)
-    if (analyzedIfBlock.returnType != analyzedElseBlock.returnType) throw Error(Error.SEMANTIC, range.file, List(
+    if (analyzedIfBlock.returnType !~= analyzedElseBlock.returnType) throw Error(Error.SEMANTIC, range.file, List(
       ErrorComponent(analyzedIfBlock.range, Some(s"The if branch returns value of type '${analyzedIfBlock.returnType}'")),
       ErrorComponent(analyzedElseBlock.range, Some(s"The else branch returns value of type '${analyzedElseBlock.returnType}'"))
     ), Some("Both branches of an if statement must return values of the same type"))
     IfExpr(analyzedCondition, analyzedIfBlock, analyzedElseBlock, range)
+  case syn.MutExpr(expr, mutable, range, kwRange) =>
+    val analyzedExpr = analyzeExpr(ctx)(expr)
+    if (analyzedExpr.returnType !~= TypeDatatype(false)) throw Error(Error.SEMANTIC, kwRange.file, List(ErrorComponent(kwRange, Some(s"Expected 'Type', found '${analyzedExpr.returnType}'"))), Some("'mut' modifier is only applicable on expressions of type 'Type'"))
+    MutExpr(analyzedExpr, mutable, range)
 }

@@ -13,6 +13,8 @@ extension (result: LexerResult) {
   }
 }
 
+val MAX_PRECEDENCE = 9
+
 case class LexerState(chars: List[Char], pos: FilePos)
 
 abstract class Token() {
@@ -71,7 +73,7 @@ private val escapedChars = Map('t' -> '\t', 'b' -> '\b', 'n' -> '\n', 'r' -> '\r
 private val escapedCharsInverted = escapedChars.map(_.swap)
 private val symbols = Set(":", "::", "...", "=>", "=")
 private val specialSymbols = "()[]{}.,;".toSet
-private val keywords = Set("let", "fn", "if", "then", "else", "while", "true", "false")
+private val keywords = Set("let", "fn", "if", "then", "else", "while", "true", "false", "const", "mut")
 
 private val nextChar = State[LexerState, (Char, FilePos)](state => ((state.chars.head, state.pos), LexerState(state.chars.tail, state.pos + 1)))
 

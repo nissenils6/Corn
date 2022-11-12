@@ -37,6 +37,7 @@ abstract class Expr {
     case FunExpr(parameters, returnType, expr, _) => s"fn(${parameters.map(_.format(indentation)).mkString(", ")})${returnType.map(returnType => s": ${returnType.format(indentation)}").getOrElse("")} => ${expr.format(indentation)}"
     case FunTypeExpr(parameters, returnType, _) => s"(${parameters.map(_.format(indentation))}) => ${returnType.format(indentation)}"
     case IfExpr(condition, ifBlock, elseBlock, _) => s"if ${condition.format(indentation)} then ${ifBlock.format(indentation)} else ${elseBlock.format(indentation)}"
+    case MutExpr(expr, mutable, _, _) => s"${if mutable then "mut" else "const"} ${expr.format(indentation)}"
   }
 }
 
@@ -65,6 +66,8 @@ case class FunTypeExpr(parameters: List[Expr], returnType: Expr, range: FilePosR
 case class IfExpr(condition: Expr, ifBlock: Expr, elseBlock: Expr, range: FilePosRange) extends Expr
 
 case class WhileExpr(condition: Expr, ifBlock: Expr, range: FilePosRange) extends Expr
+
+case class MutExpr(expr: Expr, mutable: Boolean, range: FilePosRange, kwRange: FilePosRange) extends Expr
 
 abstract class Pattern {
   def range: FilePosRange
@@ -119,15 +122,22 @@ private def parseArgument(state: ParserState): ((Option[String], Expr), ParserSt
 }
 
 private def parseStmt(state: ParserState): (Expr, ParserState) = state.tokens match {
-  case SymbolToken("}", range) :: rest => (UnitExpr(range), state)
+  case SymbolToken("}", range) :: _ => (UnitExpr(range), state)
   case _ => parseExpr(0, true)(state)
 }
 
+// todo: Wrap entire thing in parseExpr(precedence, allowFunTypeLiterals)(...)
 private def parseExpr(precedence: Int, allowFunTypeLiterals: Boolean)(state: ParserState): (Expr, ParserState) = state.tokens match {
   case IdenToken(iden, range) :: rest => parseExpr(precedence, allowFunTypeLiterals)(RefExpr(iden, range), state withTokens rest)
   case IntToken(int, range) :: rest => parseExpr(precedence, allowFunTypeLiterals)(IntExpr(int, range), state withTokens rest)
   case KeywordToken("true", range) :: rest => parseExpr(precedence, allowFunTypeLiterals)(BoolExpr(true, range), state withTokens rest)
   case KeywordToken("false", range) :: rest => parseExpr(precedence, allowFunTypeLiterals)(BoolExpr(false, range), state withTokens rest)
+  case KeywordToken("const", range) :: rest =>
+    val (subExpr: Expr, newState: ParserState) = parseExpr(lex.MAX_PRECEDENCE, allowFunTypeLiterals)(state withTokens rest)
+    parseExpr(precedence, allowFunTypeLiterals)(MutExpr(subExpr, false, range to subExpr.range, range), newState)
+  case KeywordToken("mut", range) :: rest =>
+    val (subExpr: Expr, newState: ParserState) = parseExpr(lex.MAX_PRECEDENCE, allowFunTypeLiterals)(state withTokens rest)
+    parseExpr(precedence, allowFunTypeLiterals)(MutExpr(subExpr, true, range to subExpr.range, range), newState)
   case SymbolToken("(", startRange) :: exprTokens =>
     val (exprs, newState, endRange) = parseSep(state withTokens exprTokens, parseExpr(0, true), ",", ")", "expression")
     newState.tokens match {

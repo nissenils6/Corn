@@ -3,63 +3,91 @@ package sem
 import core.*
 import gen.*
 
+import scala.annotation.targetName
 import scala.collection.mutable
 
 abstract class Datatype {
+  def mutable: Boolean
+
   lazy val (size: Int, align: Int) = this match {
-    case UnitDatatype => (0, 0)
-    case IntDatatype => (8, 8)
-    case BoolDatatype => (1, 1)
-    case TypeDatatype => (0, 0)
-    case TupleDatatype(elements) => 
+    case UnitDatatype(_) => (0, 0)
+    case IntDatatype(_) => (8, 8)
+    case BoolDatatype(_) => (1, 1)
+    case TypeDatatype(_) => (0, 0)
+    case TupleDatatype(elements, _) =>
       val (size, align, _) = Datatype.alignSequence(elements)
       (size, align)
-    case FunDatatype(_, _) => (8, 8)
+    case FunDatatype(_, _, _) => (8, 8)
   }
 
   lazy val (runtime: Boolean, compiletime: Boolean) = this match {
-    case UnitDatatype => (true, true)
-    case IntDatatype => (true, true)
-    case BoolDatatype => (true, true)
-    case TypeDatatype => (false, true)
-    case TupleDatatype(elements) => (elements.forall(_.runtime), elements.forall(_.compiletime))
-    case FunDatatype(_, _) => (true, true)
+    case UnitDatatype(_) => (true, true)
+    case IntDatatype(_) => (true, true)
+    case BoolDatatype(_) => (true, true)
+    case TypeDatatype(_) => (false, true)
+    case TupleDatatype(elements, _) => (elements.forall(_.runtime), elements.forall(_.compiletime))
+    case FunDatatype(_, _, _) => (true, true)
+  }
+  
+  @targetName("implicitCast")
+  def ~=(datatype: Datatype): Boolean = (this, datatype) match {
+    case (TupleDatatype(elements1, _), TupleDatatype(elements2, _)) => elements1.zip(elements2).forall{case (d1, d2) => d1 ~= d2}
+    case (FunDatatype(_, _, _), FunDatatype(_, _, _)) => this == datatype
+    case (_, _) => getClass == datatype.getClass
+  }
+  
+  def !~=(datatype: Datatype): Boolean = !(this ~= datatype)
+  
+  def withMut(mutable: Boolean): Datatype = this match {
+    case UnitDatatype(_) => UnitDatatype(mutable)
+    case IntDatatype(_) => IntDatatype(mutable)
+    case BoolDatatype(_) => BoolDatatype(mutable)
+    case TypeDatatype(_) => TypeDatatype(mutable)
+    case TupleDatatype(elements, _) => TupleDatatype(elements, mutable)
+    case FunDatatype(params, returnType, _) => FunDatatype(params, returnType, mutable)
   }
 
+  def asUnit: Option[UnitDatatype] = if isInstanceOf[UnitDatatype] then Some(asInstanceOf[UnitDatatype]) else None
+  def asInt: Option[IntDatatype] = if isInstanceOf[IntDatatype] then Some(asInstanceOf[IntDatatype]) else None
+  def asBool: Option[BoolDatatype] = if isInstanceOf[BoolDatatype] then Some(asInstanceOf[BoolDatatype]) else None
+  def asType: Option[TypeDatatype] = if isInstanceOf[TypeDatatype] then Some(asInstanceOf[TypeDatatype]) else None
+  def asTuple: Option[TupleDatatype] = if isInstanceOf[TupleDatatype] then Some(asInstanceOf[TupleDatatype]) else None
+  def asFun: Option[FunDatatype] = if isInstanceOf[FunDatatype] then Some(asInstanceOf[FunDatatype]) else None
+
   def generateCopyCode(ctx: ExprCodeGenContext, dst: Address, src: Address): Unit = this match {
-    case UnitDatatype => ()
-    case IntDatatype | FunDatatype(_, _) => ctx.add(
+    case UnitDatatype(_) => ()
+    case IntDatatype(_) | FunDatatype(_, _, _) => ctx.add(
       Load(Reg.RAX, src),
       Store(dst, Reg.RAX)
     )
-    case BoolDatatype => ctx.add(
+    case BoolDatatype(_) => ctx.add(
       Load(Reg.RAX, src, RegSize.Byte),
       Store(dst, Reg.RAX, RegSize.Byte)
     )
-    case TupleDatatype(elements) => elements.zip(Datatype.alignSequence(elements)._3).foreach(t => t._1.generateCopyCode(ctx, dst + t._2, src + t._2))
+    case TupleDatatype(elements, _) => elements.zip(Datatype.alignSequence(elements)._3).foreach(t => t._1.generateCopyCode(ctx, dst + t._2, src + t._2))
   }
 
-  override def toString: String = this match {
-    case UnitDatatype => s"()"
-    case IntDatatype => s"Int"
-    case BoolDatatype => s"Bool"
-    case TypeDatatype => s"Type"
-    case TupleDatatype(elements) => s"(${elements.mkString(", ")})"
-    case FunDatatype(params, returnType) => s"((${params.mkString(", ")}) => $returnType)"
-  }
+  override def toString: String = (if mutable then "mut " else "") + (this match {
+    case UnitDatatype(_) => s"()"
+    case IntDatatype(_) => s"Int"
+    case BoolDatatype(_) => s"Bool"
+    case TypeDatatype(_) => s"Type"
+    case TupleDatatype(elements, _) => s"(${elements.mkString(", ")})"
+    case FunDatatype(params, returnType, _) => s"((${params.mkString(", ")}) => $returnType)"
+  })
 }
 
-case object UnitDatatype extends Datatype
+case class UnitDatatype(mutable: Boolean) extends Datatype
 
-case object IntDatatype extends Datatype
+case class IntDatatype(mutable: Boolean) extends Datatype
 
-case object BoolDatatype extends Datatype
+case class BoolDatatype(mutable: Boolean) extends Datatype
 
-case object TypeDatatype extends Datatype
+case class TypeDatatype(mutable: Boolean) extends Datatype
 
-case class TupleDatatype(elements: List[Datatype]) extends Datatype
+case class TupleDatatype(elements: List[Datatype], mutable: Boolean) extends Datatype
 
-case class FunDatatype(params: List[Datatype], returnType: Datatype) extends Datatype
+case class FunDatatype(params: List[Datatype], returnType: Datatype, mutable: Boolean) extends Datatype
 
 object Datatype {
   def alignSequence(elements: List[Datatype]): (Int, Int, List[Int]) = {
@@ -78,23 +106,29 @@ object Datatype {
 
 abstract class ConstVal {
   lazy val datatype: Datatype = this match {
-    case ConstUnit => UnitDatatype
-    case ConstInt(_) => IntDatatype
-    case ConstBool(_) => BoolDatatype
-    case ConstType(_) => TypeDatatype
-    case ConstTuple(elements) => TupleDatatype(elements.map(_.datatype))
+    case ConstUnit => UnitDatatype(false)
+    case ConstInt(_) => IntDatatype(false)
+    case ConstBool(_) => BoolDatatype(false)
+    case ConstType(_) => TypeDatatype(false)
+    case ConstTuple(elements) => TupleDatatype(elements.map(_.datatype), false)
     case ConstFunction(function) => function.signature
   }
 
-  lazy val asType: Option[Datatype] = this match {
+  lazy val toType: Option[Datatype] = this match {
     case ConstType(datatype) => Some(datatype)
-    case ConstTuple(elements) if elements.map(_.asType).forall(_.nonEmpty) => Some(TupleDatatype(elements.map(_.asType.get)))
-    case ConstUnit => Some(UnitDatatype)
+    case ConstTuple(elements) if elements.map(_.toType).forall(_.nonEmpty) => Some(TupleDatatype(elements.map(_.toType.get), false))
+    case ConstUnit => Some(UnitDatatype(false))
     case _ => None
   }
 
-  def toInt: Long = asInstanceOf[ConstInt].int
-  def toBool: Boolean = asInstanceOf[ConstBool].bool
+  def toInt: Long = this.asInt.get.int
+  def toBool: Boolean = this.asBool.get.bool
+
+  def asInt: Option[ConstInt] = if isInstanceOf[ConstInt] then Some(asInstanceOf[ConstInt]) else None
+  def asBool: Option[ConstBool] = if isInstanceOf[ConstBool] then Some(asInstanceOf[ConstBool]) else None
+  def asType: Option[ConstType] = if isInstanceOf[ConstType] then Some(asInstanceOf[ConstType]) else None
+  def asTuple: Option[ConstTuple] = if isInstanceOf[ConstTuple] then Some(asInstanceOf[ConstTuple]) else None
+  def asFun: Option[ConstFunction] = if isInstanceOf[ConstFunction] then Some(asInstanceOf[ConstFunction]) else None
 
   def generateCode(address: Address): List[Instr]
 

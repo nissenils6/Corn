@@ -31,7 +31,7 @@ class BuiltinGlobalVar(module: => Module, val name: String, value: ConstVal) ext
 
 class UserGlobalVar(module: => Module, val name: String, init: => UserGlobalVarInit, patternNav: PatternNav, typeExpr: Option[syn.Expr], val range: FilePosRange) extends GlobalVar {
   lazy val datatype: Datatype = typeExpr.map(typeExpr => analyzeExpr(ExprParsingContext(module, None))(typeExpr).constDatatype).getOrElse(patternNav.datatype(init.analyzedExpr.returnType))
-  lazy val constVal: Option[ConstVal] = init.analyzedExpr.constVal.map(patternNav.const)
+  lazy val constVal: Option[ConstVal] = if datatype.mutable then None else init.analyzedExpr.constVal.map(patternNav.const)
 }
 
 class UserGlobalVarInit(module: => Module, expr: syn.Expr, pattern: => Pattern[UserGlobalVar]) {
@@ -39,7 +39,7 @@ class UserGlobalVarInit(module: => Module, expr: syn.Expr, pattern: => Pattern[U
   lazy val analyzedPattern: Pattern[UserGlobalVar] = pattern
 
   def typeCheck(): Unit = {
-    if (analyzedPattern.datatype != analyzedExpr.returnType) throw Error.typeMismatch(analyzedExpr.returnType, analyzedPattern.datatype, analyzedExpr.range, analyzedPattern.range)
+    if (analyzedPattern.datatype !~= analyzedExpr.returnType) throw Error.typeMismatch(analyzedExpr.returnType, analyzedPattern.datatype, analyzedExpr.range, analyzedPattern.range)
   }
 
   def format(indentation: Int): String = s"${analyzedExpr.constVal.map(value => s"${" " * indentation}[CONST: ${value.toString}]\n").getOrElse("")}${" " * indentation}${pattern.format(indentation)} = ${analyzedExpr.format(indentation)};"
@@ -58,7 +58,7 @@ abstract class Fun {
   def generateCode(): List[Instr]
   def generateInlineCode(ctx: ExprCodeGenContext): Boolean
 
-  lazy val signature: FunDatatype = FunDatatype(argTypes, returnType)
+  lazy val signature: FunDatatype = FunDatatype(argTypes.map(_.withMut(false)), returnType.withMut(false), false)
 
   private var labelInternal: Option[String] = None
 

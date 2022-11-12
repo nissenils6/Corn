@@ -1,13 +1,13 @@
 import core.{File, FilePos, Error, ErrorGroup}
 import gen.AsmGen
 import lex.{LexerState, tokenize}
-import syn.{GlobalStmt, ParserState, parseGlobalStmts}
 import sem.analyzeFile
+import syn.{GlobalStmt, ParserState, parseGlobalStmts}
 
 import java.io.PrintWriter
 import scala.languageFeature.implicitConversions
 
-private val ON_DEKSTOP = true
+private val ON_DEKSTOP = false
 
 private val PATH = if ON_DEKSTOP then "C:/Users/nisse/OneDrive/Skrivbord/Corn/TestCode" else "C:/Users/nisse/Desktop/Corn/TestCode"
 private val SOURCE_PATH = PATH + ".txt"
@@ -57,6 +57,7 @@ def compile(filePath: String): Unit = {
     case error: (Error | ErrorGroup) =>
       printSeparator()
       print(error)
+      error.printStackTrace()
   }
 }
 
