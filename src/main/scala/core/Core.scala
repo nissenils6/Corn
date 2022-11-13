@@ -5,6 +5,7 @@ import sem.Datatype
 
 import scala.annotation.{tailrec, targetName, unused}
 import scala.collection.mutable
+import scala.io.BufferedSource
 import scala.math
 
 case class State[S, A](run: S => (A, S)) {
@@ -46,16 +47,6 @@ extension[T] (list: List[Option[T]]) {
 extension (int: Int) {
   def roundUp(powerOf2: Int): Int = (int & ~(powerOf2 - 1)) + (if (int & (powerOf2 - 1)) > 0 then powerOf2 else 0)
   def roundDown(powerOf2: Int): Int = if powerOf2 > 0 then math.floorDiv(int, powerOf2) * powerOf2 else int
-}
-
-extension[T, I <: IterableOnce[T]] (it: I) {
-  def accumulate[E](startValue: E)(f: (T, E) => E): E = {
-    var accumulator = startValue
-    for (element <- it) {
-      accumulator = f(element, accumulator)
-    }
-    accumulator
-  }
 }
 
 case class ErrorComponent(range: FilePosRange, message: Option[String] = None) {
@@ -104,7 +95,15 @@ object Error {
     Error(INTERNAL, range.file, List(ErrorComponent(range, Some(message))))
 }
 
-case class File(name: String, source: String) {
+case class File(filePath: String) {
+  val name: String = filePath.split('/').last.split('.').head
+  val source: String = {
+    val fileContent = io.Source.fromFile(filePath)
+    val source = fileContent.getLines().mkString("\n")
+    fileContent.close()
+    source
+  }
+
   val newlines: Array[Int] = (for {
     (char, index) <- source.zipWithIndex
     if char == '\n'
@@ -113,35 +112,22 @@ case class File(name: String, source: String) {
   def lastRange: FilePosRange = FilePosRange(source.length, source.length + 1, this)
 }
 
-case class FilePos(pos: Int, file: File) {
-  def +(int: Int): FilePos = FilePos(pos + int, file)
-
-  def -(int: Int): FilePos = FilePos(pos - int, file)
-  def until(range: FilePosRange): FilePosRange = FilePosRange(pos, range.end + 1, file)
-  def to(range: FilePosRange): FilePosRange = FilePosRange(pos, range.end, file)
-  def range: FilePosRange = this until this
-  def until(filePos: FilePos): FilePosRange = FilePosRange(pos, filePos.pos + 1, file)
-  def exlRange: FilePosRange = this to this
-  def to(filePos: FilePos): FilePosRange = FilePosRange(pos, filePos.pos, file)
-}
-
 case class FilePosRange(start: Int, end: Int, file: File) {
   def +(int: Int): FilePosRange = FilePosRange(start + int, end + int, file)
 
   def -(int: Int): FilePosRange = FilePosRange(start - int, end - int, file)
 
-  def until(filePos: FilePos): FilePosRange = FilePosRange(start, filePos.pos + 1, file)
-
-  def until(range: FilePosRange): FilePosRange = FilePosRange(start, range.end + 1, file)
-
-  def to(filePos: FilePos): FilePosRange = FilePosRange(start, filePos.pos, file)
-
   def to(range: FilePosRange): FilePosRange = FilePosRange(start, range.end, file)
+
+  def after: FilePosRange = FilePosRange(end, end + 1, file)
 
   override def toString: String = s"$start..$end"
 
   def underline(underlineChar: Char, message: Option[String] = None): String = {
-    val startLine = file.newlines.lastIndexWhere(_ < start)
+    val startLine = file.newlines.lastIndexWhere(_ < start) match {
+      case -1 => 0
+      case num => num
+    }
     val endLine = file.newlines.indexWhere(_ >= end) match {
       case -1 => file.newlines.length
       case num => num
@@ -159,9 +145,12 @@ case class FilePosRange(start: Int, end: Int, file: File) {
       case (char, index) if start until end contains (startIndex + index) => List((char, underlineChar))
       case ('\t', _) => List.fill(4)((' ', ' '))
       case (char, _) => List((char, ' '))
-    }.unzip
+    }.unzip match {
+      case (code, under) if startIndex == 0 => ("1:".padTo(lineNumSpace, ' ') + "| " + code.mkString, " " * lineNumSpace + "| " + under.mkString)
+      case (code, under) => (code.mkString, under.mkString)
+    }
 
-    val string = code.mkString.split("\n+").zip(under.mkString.split("\n+")).filter(t => t._1.length + t._2.length > 0).map(t => s"${t._1}\n${t._2}").mkString("\n")
+    val string = code.split("\n+").zip(under.split("\n+")).filter(t => t._1.length + t._2.length > 0).map(t => s"${t._1}\n${t._2}").mkString("\n")
 
     val indentation = " " * lineNumSpace + "| " + (if startLine == endLine - 1 then " " * (start - startIndex - 1 + file.source.substring(startIndex, start).count(_ == '\t') * 3) else "")
     s"$string${message.map(_.split('\n')).getOrElse(Array[String]()).map(msgLine => s"\n$indentation$msgLine").mkString}"

@@ -123,7 +123,7 @@ class UserFun(val module: Module, parameters: List[syn.Pattern], retTypeExpr: Op
       case TuplePattern(elements, _) => elements.zip(Datatype.alignSequence(elements.map(_.datatype))._3.map(_ + offset)).foreach(iterateArgs.tupled)
     }
 
-    args.accumulate(0) { case (arg, offset) =>
+    args.foldLeft(0) { case (offset, arg) =>
       iterateArgs(arg, offset)
       offset + arg.datatype.size
     }

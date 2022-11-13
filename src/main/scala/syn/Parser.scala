@@ -177,7 +177,7 @@ private def parseExpr(precedence: Int, allowFunTypeLiterals: Boolean)(state: Par
       case KeywordToken("else", _) :: elseTokens =>
         val (elseBodyExpr, lastState) = parseExpr(0, true)(elseState withTokens elseTokens)
         parseExpr(0, true)(IfExpr(conditionExpr, bodyExpr, elseBodyExpr, startRange to elseBodyExpr.range), lastState)
-      case _ => parseExpr(0, true)(IfExpr(conditionExpr, bodyExpr, UnitExpr(FilePos(bodyExpr.range.end, bodyExpr.range.file).range), startRange to bodyExpr.range), elseState)
+      case _ => parseExpr(0, true)(IfExpr(conditionExpr, bodyExpr, UnitExpr(FilePosRange(bodyExpr.range.end, bodyExpr.range.end + 1, bodyExpr.range.file)), startRange to bodyExpr.range), elseState)
     }
   case token :: _ => throw Error.unexpected(token, "expression")
   case _ => throw Error.unexpected("expression", state.file)
