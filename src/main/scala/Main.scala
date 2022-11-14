@@ -1,6 +1,6 @@
 import core.{Error, ErrorGroup, File, FilePosRange}
 import gen.AsmGen
-import lex.{LexerState, tokenize, tokenize2}
+import lex.{LexerState, tokenize}
 import sem.analyzeFile
 import syn.{GlobalStmt, ParserState, parseGlobalStmts}
 
@@ -16,7 +16,7 @@ private val ASSEMBLY_PATH = PATH + ".asm"
 
 @main def main(): Unit = try {
   val file = File(SOURCE_PATH)
-  val tokens = tokenize2(file)
+  val tokens = tokenize(file)
   val parsedFile = parseGlobalStmts(List(), ParserState(tokens, file))._1.reverse
   val module = analyzeFile(parsedFile, file)
   new PrintWriter(ASSEMBLY_PATH) {
@@ -24,7 +24,7 @@ private val ASSEMBLY_PATH = PATH + ".asm"
     close()
   }
 
-  println(List(tokens.mkString(" "), parsedFile.mkString("\n\n"), module.format(0)).mkString("-" * 128 + "\n\n", "\n" + "-" * 128 + "\n\n", "\n" + "-" * 128))
+  println(List(tokens.mkString(" "), parsedFile.mkString("\n\n"), module.format(0)).mkString("-" * 128 + "\n\n", "\n\n" + "-" * 128 + "\n\n", "\n\n" + "-" * 128))
 } catch {
   case error: (Error | ErrorGroup) =>
     error.printStackTrace()

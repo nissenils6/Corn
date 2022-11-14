@@ -148,6 +148,6 @@ class Module(val file: File, fileContent: => (Map[String, List[GlobalVar]], List
 
     val formattedBuiltin = section(vars.filter(_._2.isInstanceOf[BuiltinGlobalVar]).map(v => s"${v._2.asInstanceOf[BuiltinGlobalVar].format(indentation + 1)}\n").mkString)
     val formattedVars = section(varInits.map(v => s"${v.format(indentation + 1)}\n\n").mkString)
-    s"${" " * indentation}module ${file.name} {\n$formattedBuiltin$formattedVars}\n"
+    s"${" " * indentation}module ${file.name} {\n$formattedBuiltin$formattedVars}"
   }
 }
