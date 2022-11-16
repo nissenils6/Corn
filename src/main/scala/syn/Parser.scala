@@ -69,6 +69,8 @@ case class WhileExpr(condition: Expr, ifBlock: Expr, range: FilePosRange) extend
 
 case class MutExpr(expr: Expr, mutable: Boolean, range: FilePosRange, kwRange: FilePosRange) extends Expr
 
+//case class RefExpr(expr: Expr, range: FilePosRange) extends Expr
+
 abstract class Pattern {
   def range: FilePosRange
 
@@ -126,7 +128,6 @@ private def parseStmt(state: ParserState): (Expr, ParserState) = state.tokens ma
   case _ => parseExpr(0, true)(state)
 }
 
-// todo: Wrap entire thing in parseExpr(precedence, allowFunTypeLiterals)(...)
 private def parseExpr(precedence: Int, allowFunTypeLiterals: Boolean)(state: ParserState): (Expr, ParserState) = state.tokens match {
   case IdenToken(iden, range) :: rest => parseExpr(precedence, allowFunTypeLiterals)(RefExpr(iden, range), state withTokens rest)
   case IntToken(int, range) :: rest => parseExpr(precedence, allowFunTypeLiterals)(IntExpr(int, range), state withTokens rest)
