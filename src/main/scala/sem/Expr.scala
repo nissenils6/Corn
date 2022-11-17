@@ -418,7 +418,7 @@ class ExprCodeGenContext {
 }
 
 def analyzeExpr(ctx: ExprParsingContext)(expr: syn.Expr): Expr = expr match {
-  case syn.CallExpr(syn.RefExpr(iden, funRange), posArgs, keywordArgs, range) =>
+  case syn.CallExpr(syn.IdenExpr(iden, funRange), posArgs, keywordArgs, range) =>
     val overloadLayers = ctx.lookupOverload(iden)
     val analyzedPosArgs = posArgs.map(analyzeExpr(ctx))
     val analyzedKeywordArgs = keywordArgs.map { case (name, argExpr) => (name, analyzeExpr(ctx)(argExpr)) }
@@ -442,7 +442,7 @@ def analyzeExpr(ctx: ExprParsingContext)(expr: syn.Expr): Expr = expr match {
     ErrorComponent(function.range, Some("This is an expression that, when evaluated, returns a function\nIn order to use keyword arguments, a direct reference is required")) :: keywordArgs.map { case (_, argExpr) => ErrorComponent(argExpr.range, Some("Disallowed keyword argument")) },
     Some("Keyword arguments are not allowed for indirect function calls")
   )
-  case syn.RefExpr(iden, range) => ctx.lookup(iden, range) match {
+  case syn.IdenExpr(iden, range) => ctx.lookup(iden, range) match {
     case Some(globalVar: GlobalVar) => GlobalVarRefExpr(globalVar, range)
     case Some(localVar: LocalVar) => LocalVarRefExpr(localVar, range)
     case None => throw Error.todo(ctx.toString, range)

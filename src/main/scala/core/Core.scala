@@ -1,6 +1,7 @@
 package core
 
 import lex.Token
+import syn.Expr
 import sem.Datatype
 
 import scala.annotation.{tailrec, targetName, unused}
@@ -66,6 +67,9 @@ object Error {
   val SYNTAX = "Syntax"
   val SEMANTIC = "Semantic"
   val INTERNAL = "Internal"
+
+  def unexpected(expr: Expr, expected: String): Error =
+    Error(SYNTAX, expr.range.file, List(ErrorComponent(expr.range, Some(s"Unexpected expression, expected '$expected'"))))
 
   def unexpected(token: Token, expected: String): Error =
     Error(SYNTAX, token.range.file, List(ErrorComponent(token.range, Some(s"Unexpected token '$token', expected '$expected'"))))
