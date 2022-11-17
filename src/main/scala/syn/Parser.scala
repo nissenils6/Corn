@@ -73,6 +73,8 @@ case class WhileExpr(condition: Expr, ifBlock: Expr, range: FilePosRange) extend
 
 case class MutExpr(expr: Expr, mutable: Boolean, range: FilePosRange, kwRange: FilePosRange) extends Expr
 
+//case class RefExpr(expr: Expr, range: FilePosRange) extends Expr
+
 abstract class Pattern {
   def range: FilePosRange
 

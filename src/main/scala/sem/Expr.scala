@@ -27,10 +27,11 @@ abstract class Expr() {
   }
 
   lazy val constVal: Option[ConstVal] = this match {
-    case CallExpr(function, args, _) => (for {
+    case CallExpr(function, args, _) => for {
       fun <- function.constVal
       argValues <- args.map(_.constVal).extract
-    } yield fun.asInstanceOf[ConstFunction].function.constEval(argValues)).flatten
+      returnValue <- fun.asInstanceOf[ConstFunction].function.constEval(argValues)
+    } yield returnValue
     case GlobalVarRefExpr(globalVar, _) => globalVar.constVal
     case LocalVarRefExpr(localVar, _) => localVar.constVal
     case IntExpr(int, _) => Some(ConstInt(int))
@@ -40,6 +41,7 @@ abstract class Expr() {
     case LetExpr(_, expr, _) => expr.constVal
     case FunExpr(fun, _) => Some(ConstFunction(fun))
     case FunTypeExpr(parameters, returnType, _) => Some(ConstType(FunDatatype(parameters.map(_.constDatatype), returnType.constDatatype, false)))
+    case IfExpr(condition, ifBlock, elseBlock, _) => condition.constVal.flatMap(evaluatedCondition => if evaluatedCondition.toBool then ifBlock.constVal else elseBlock.constVal)
     case MutExpr(expr, mutable, _) => for {
       constType <- expr.constVal
       datatype <- constType.toType
@@ -53,10 +55,11 @@ abstract class Expr() {
   }
 
   def constEval(ctx: ExprConstEvalContext): Option[ConstVal] = this match {
-    case CallExpr(function, args, _) => (for {
+    case CallExpr(function, args, _) => for {
       fun <- function.constEval(ctx)
       argValues <- args.map(_.constEval(ctx)).extract
-    } yield fun.asInstanceOf[ConstFunction].function.constEval(argValues)).flatten
+      returnValue <- fun.asInstanceOf[ConstFunction].function.constEval(argValues)
+    } yield returnValue
     case GlobalVarRefExpr(globalVar, _) => globalVar.constVal
     case LocalVarRefExpr(localVar, _) => ctx.lookup(localVar)
     case IntExpr(int, _) => Some(ConstInt(int))
@@ -461,7 +464,10 @@ def analyzeExpr(ctx: ExprParsingContext)(expr: syn.Expr): Expr = expr match {
     lazy val letExpr = LetExpr(analyzedPattern, analyzedExpr, range)
     ctx.add(vars)
     letExpr
-  case syn.FunExpr(parameters, returnType, expr, range) => FunExpr(new UserFun(ctx.module, parameters, returnType, expr, range), range)
+  case syn.FunExpr(parameters, returnType, expr, range) => {
+    val fun = new UserFun(ctx.module, parameters, returnType, expr, range)
+    FunExpr(fun, range)
+  }
   case syn.FunTypeExpr(parameters, returnType, range) => FunTypeExpr(parameters.map(analyzeExpr(ctx)), analyzeExpr(ctx)(returnType), range)
   case syn.IfExpr(condition, ifBlock, elseBlock, range) =>
     val analyzedCondition = analyzeExpr(ctx)(condition)
