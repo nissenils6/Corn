@@ -7,7 +7,9 @@ import scala.collection.mutable
 
 abstract class Var {
   def name: String
+
   def range: FilePosRange
+
   def datatype: Datatype
 }
 
@@ -47,15 +49,19 @@ class UserGlobalVarInit(module: => Module, expr: syn.Expr, pattern: => Pattern[U
 
 abstract class Fun {
   def range: FilePosRange
+
   def argTypes: List[Datatype]
+
   def argNameToIndex: Map[String, Int]
+
   def returnType: Datatype
 
   def format(indentation: Int): String
-  def typeCheck(): Unit
 
   def constEval(args: List[ConstVal]): Option[ConstVal]
+
   def generateCode(): List[Instr]
+
   def generateInlineCode(ctx: ExprCodeGenContext): Boolean
 
   lazy val signature: FunDatatype = FunDatatype(argTypes.map(_.withMut(false)), returnType.withMut(false), false)
@@ -79,8 +85,6 @@ class BuiltinFun(val module: Module, val argTypes: List[Datatype], val returnTyp
 
   override def format(indentation: Int): String = s"builtin fun(${argTypes.mkString(", ")}): $returnType"
 
-  override def typeCheck(): Unit = ()
-
   override def constEval(args: List[ConstVal]): Option[ConstVal] = eval(args)
 
   override def generateCode(): List[Instr] = generate()
@@ -101,11 +105,16 @@ class UserFun(val module: Module, parameters: List[syn.Pattern], retTypeExpr: Op
     case (VarPattern(patternVar, _), index) => List((patternVar.name, index))
     case _ => List()
   }.toMap
-  lazy val returnType: Datatype = retTypeExpr.map(retTypeExpr => analyzeExpr(new ExprParsingContext(module, None))(retTypeExpr).constDatatype).getOrElse(analyzedExpr.returnType)
+
+  lazy val returnType: Datatype = retTypeExpr match {
+    case Some(retTypeExpr) =>
+      val returnType = analyzeExpr(new ExprParsingContext(module, None))(retTypeExpr).constDatatype
+      if (returnType != analyzedExpr.returnType) throw Error.typeMismatch(analyzedExpr.returnType, returnType, analyzedExpr.range, retTypeExpr.range)
+      returnType
+    case None => analyzedExpr.returnType
+  }
 
   override def format(indentation: Int): String = s"fn(${args.map(_.format(indentation)).mkString(", ")}): $returnType => ${analyzedExpr.format(indentation)}"
-
-  override def typeCheck(): Unit = if (returnType != analyzedExpr.returnType) throw Error.todo(module.file)
 
   override def constEval(arguments: List[ConstVal]): Option[ConstVal] = {
     val ctx = new ExprConstEvalContext()
