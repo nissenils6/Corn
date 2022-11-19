@@ -9,38 +9,6 @@ import scala.collection.mutable
 import scala.io.BufferedSource
 import scala.math
 
-case class State[S, A](run: S => (A, S)) {
-  def map[B](f: A => B): State[S, B] = State(s => {
-    val (v, ns) = run(s)
-    (f(v), ns)
-  })
-
-  def flatMap[B](f: A => State[S, B]): State[S, B] = State(s => {
-    val (v, ns) = run(s)
-    f(v).run(ns)
-  })
-
-  def takeWhile(condition: S => Boolean): State[S, List[A]] = State(s => {
-    @tailrec def rec(l: List[A], s: S): (List[A], S) = {
-      if (condition(s)) {
-        val (v, ns) = run(s)
-        rec(v :: l, ns)
-      } else {
-        (l, s)
-      }
-    }
-
-    val (la, ns) = rec(List[A](), s)
-    (la.reverse, ns)
-  })
-
-  def eval(s: S): A = run(s)._1
-}
-
-object State {
-  def insert[S, A](a: A): State[S, A] = State(s => (a, s))
-}
-
 extension[T] (list: List[Option[T]]) {
   def extract: Option[List[T]] = if list.forall(_.nonEmpty) then Some(list.map(_.get)) else None
 }
@@ -121,7 +89,7 @@ case class FilePosRange(start: Int, end: Int, file: File) {
 
   def -(int: Int): FilePosRange = FilePosRange(start - int, end - int, file)
 
-  def to(range: FilePosRange): FilePosRange = FilePosRange(start, range.end, file)
+  def to(range: FilePosRange): FilePosRange = FilePosRange(start.min(range.start), end.max(range.end), file)
 
   def after: FilePosRange = FilePosRange(end, end + 1, file)
 

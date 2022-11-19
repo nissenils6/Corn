@@ -189,7 +189,7 @@ def analyzeFile(stmts: List[syn.GlobalStmt], file: File): Module = {
   }
 
   module.varInits.foreach(varInit => if (varInit.analyzedExpr.constVal.isEmpty) {
-    varInit.analyzedExpr.generateCode(ctx, true)
+    varInit.analyzedExpr.generateCode(ctx)
     iterateUserGlobalVars(varInit.analyzedPattern, 0)
   })
 

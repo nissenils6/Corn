@@ -4,7 +4,9 @@ import core.*
 
 import scala.annotation.tailrec
 
-val MAX_PRECEDENCE = 9
+val MAX_PRECEDENCE = 11
+val FUN_TYPE_LIT_PRECEDENCE = 1
+val ASSIGNMENT_PRECEDENCE = 0
 
 abstract class Token() {
   def range: FilePosRange
@@ -30,15 +32,15 @@ abstract class Token() {
 case class IdenToken(iden: String, range: FilePosRange) extends Token {
   val precedence: Int = if (idenSymbols.contains(iden.head)) {
     iden match {
-      case "*" | "/" | "%" => 8
-      case "+" | "-" => 7
-      case ">>" | "<<" => 6
-      case ">" | "<" | ">=" | "<=" => 5
-      case "==" | "!=" => 4
-      case "|" | "&" | "^" => 3
-      case _ => 2
+      case "*" | "/" | "%" => 10
+      case "+" | "-" => 9
+      case ">>" | "<<" => 8
+      case ">" | "<" | ">=" | "<=" => 7
+      case "==" | "!=" => 6
+      case "|" | "&" | "^" => 5
+      case _ => 4
     }
-  } else 1
+  } else 3
 }
 
 case class SymbolToken(symbol: String, range: FilePosRange) extends Token

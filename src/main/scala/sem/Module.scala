@@ -11,6 +11,8 @@ abstract class Var {
   def range: FilePosRange
 
   def datatype: Datatype
+  
+  def constVal: Option[ConstVal]
 }
 
 abstract class GlobalVar extends Var {
@@ -32,7 +34,7 @@ class BuiltinGlobalVar(module: => Module, val name: String, value: ConstVal) ext
 }
 
 class UserGlobalVar(module: => Module, val name: String, init: => UserGlobalVarInit, patternNav: PatternNav, typeExpr: Option[syn.Expr], val range: FilePosRange) extends GlobalVar {
-  lazy val datatype: Datatype = typeExpr.map(typeExpr => analyzeExpr(ExprParsingContext(module, None))(typeExpr).constDatatype).getOrElse(patternNav.datatype(init.analyzedExpr.returnType))
+  lazy val datatype: Datatype = typeExpr.map(typeExpr => analyzeExpr(ExprParsingContext(module, None))(typeExpr).constDatatype).getOrElse(patternNav.datatype(init.analyzedExpr.returnType).withMut(false))
   lazy val constVal: Option[ConstVal] = if datatype.mutable then None else init.analyzedExpr.constVal.map(patternNav.const)
 }
 
@@ -51,8 +53,6 @@ abstract class Fun {
   def range: FilePosRange
 
   def argTypes: List[Datatype]
-
-  def argNameToIndex: Map[String, Int]
 
   def returnType: Datatype
 
@@ -81,8 +81,6 @@ abstract class Fun {
 class BuiltinFun(val module: Module, val argTypes: List[Datatype], val returnType: Datatype, eval: List[ConstVal] => Option[ConstVal], generate: () => List[Instr], inlineGenerate: ExprCodeGenContext => Boolean = _ => false) extends Fun {
   override def range: FilePosRange = module.file.lastRange
 
-  override def argNameToIndex: Map[String, Int] = Map()
-
   override def format(indentation: Int): String = s"builtin fun(${argTypes.mkString(", ")}): $returnType"
 
   override def constEval(args: List[ConstVal]): Option[ConstVal] = eval(args)
@@ -101,15 +99,11 @@ class UserFun(val module: Module, parameters: List[syn.Pattern], retTypeExpr: Op
   lazy val analyzedExpr: Expr = analyzeExpr(new ExprParsingContext(module, Some(this)))(expr)
 
   lazy val argTypes: List[Datatype] = args.map(_.datatype)
-  lazy val argNameToIndex: Map[String, Int] = args.zipWithIndex.flatMap {
-    case (VarPattern(patternVar, _), index) => List((patternVar.name, index))
-    case _ => List()
-  }.toMap
 
   lazy val returnType: Datatype = retTypeExpr match {
     case Some(retTypeExpr) =>
       val returnType = analyzeExpr(new ExprParsingContext(module, None))(retTypeExpr).constDatatype
-      if (returnType != analyzedExpr.returnType) throw Error.typeMismatch(analyzedExpr.returnType, returnType, analyzedExpr.range, retTypeExpr.range)
+      // if (returnType != analyzedExpr.returnType) throw Error.typeMismatch(analyzedExpr.returnType, returnType, analyzedExpr.range, retTypeExpr.range)
       returnType
     case None => analyzedExpr.returnType
   }
@@ -117,7 +111,7 @@ class UserFun(val module: Module, parameters: List[syn.Pattern], retTypeExpr: Op
   override def format(indentation: Int): String = s"fn(${args.map(_.format(indentation)).mkString(", ")}): $returnType => ${analyzedExpr.format(indentation)}"
 
   override def constEval(arguments: List[ConstVal]): Option[ConstVal] = {
-    val ctx = new ExprConstEvalContext()
+    val ctx = new ExprConstEvalContext(module)
     args.zip(arguments).foreach(t => ctx.add(t._1, t._2))
     analyzedExpr.constEval(ctx)
   }
@@ -132,7 +126,7 @@ class UserFun(val module: Module, parameters: List[syn.Pattern], retTypeExpr: Op
       case TuplePattern(elements, _) => elements.zip(Datatype.alignSequence(elements.map(_.datatype))._3.map(_ + offset)).foreach(iterateArgs.tupled)
     }
 
-    args.foldLeft(0) { case (offset, arg) =>
+    args.foldLeft(0) { (offset, arg) =>
       iterateArgs(arg, offset)
       offset + arg.datatype.size
     }

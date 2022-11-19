@@ -338,7 +338,7 @@ object AsmGen {
 
   override def toString: String = mutable.StringBuilder()
     .append("format pe64 console\nentry start\n\n")
-    .append(s"section '.text' code readable executable\n\n${codeBuilder.map { case (label, instr) => s"$label:\n${instr.mkString}" }.mkString("\n")}start:\n$mainBuilder\n")
+    .append(s"section '.text' code readable executable\n\n${codeBuilder.map { (label, instr) => s"$label:\n${instr.mkString}" }.mkString("\n")}start:\n$mainBuilder\n")
     .append(s"$bssSection")
     .append(s"$constSection")
     .append(s"$dataSection")
