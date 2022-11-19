@@ -27,7 +27,7 @@ abstract class Datatype {
 
   @targetName("implicitCast")
   def ~=(datatype: Datatype): Boolean = (this, datatype) match {
-    case (RefDatatype(datatype1, _), RefDatatype(datatype2, _)) => datatype1 ~= datatype2
+    case (RefDatatype(datatype1, _), RefDatatype(datatype2, _)) => datatype1 == datatype2
     case (TupleDatatype(elements1, _), TupleDatatype(elements2, _)) => elements1.zip(elements2).forall { (d1, d2) => d1 ~= d2 }
     case (FunDatatype(_, _, _), FunDatatype(_, _, _)) => this == datatype
     case (_, _) => getClass == datatype.getClass

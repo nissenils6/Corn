@@ -234,9 +234,11 @@ private def parseGlobalStmt(state: ParserState): (GlobalStmt, ParserState) = sta
 }
 
 @tailrec
-def parseGlobalStmts(stmts: List[GlobalStmt], state: ParserState): (List[GlobalStmt], ParserState) = state.tokens match {
+private def parseGlobalStmts(stmts: List[GlobalStmt], state: ParserState): (List[GlobalStmt], ParserState) = state.tokens match {
   case tokens if tokens.nonEmpty =>
     val (stmt, newState) = parseGlobalStmt(state)
     parseGlobalStmts(stmt :: stmts, newState.expectSymbol(";"))
   case _ => (stmts, state)
 }
+
+def parseFile(tokens: List[Token], file: File): List[GlobalStmt] = parseGlobalStmts(List(), ParserState(tokens, file))._1.reverse

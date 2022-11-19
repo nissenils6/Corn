@@ -2,7 +2,7 @@ import core.{Error, ErrorGroup, File, FilePosRange}
 import gen.AsmGen
 import lex.{LexerState, tokenize}
 import sem.analyzeFile
-import syn.{GlobalStmt, ParserState, parseGlobalStmts}
+import syn.{GlobalStmt, ParserState, parseFile}
 
 import java.io.PrintWriter
 import scala.languageFeature.implicitConversions
@@ -24,7 +24,7 @@ def time[T](name: String, expr: => T): T = {
 @main def main(): Unit = try {
   val file = File(SOURCE_PATH)
   val tokens = time("Lexical Analysis", tokenize(file))
-  val parsedFile = time("Syntax Analysis", parseGlobalStmts(List(), ParserState(tokens, file))._1.reverse)
+  val parsedFile = time("Syntax Analysis", parseFile(tokens, file))
   val module = time("Semantic Analysis", analyzeFile(parsedFile, file))
   println()
   new PrintWriter(ASSEMBLY_PATH) {
