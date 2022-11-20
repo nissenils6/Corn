@@ -23,21 +23,25 @@ def time[T](name: String, expr: => T): T = {
 
 // while loops, heap allocation, closures, partial application, optimization, structs, unions, generics, builtin datatypes, io, for comprehensions, match expressions
 
-@main def main(): Unit = try {
-  val file = File(SOURCE_PATH)
-  val tokens = time("Lexical Analysis", tokenize(file))
-  val parsedFile = time("Syntax Analysis", parseFile(tokens, file))
-  val module = time("Semantic Analysis", analyzeFile(parsedFile, file))
-  println()
-  new PrintWriter(ASSEMBLY_PATH) {
-    write(AsmGen.toString)
-    close()
-  }
+//@main def main(): Unit = try {
+//  val file = File(SOURCE_PATH)
+//  val tokens = time("Lexical Analysis", tokenize(file))
+//  val parsedFile = time("Syntax Analysis", parseFile(tokens, file))
+//  val module = time("Semantic Analysis", analyzeFile(parsedFile, file))
+//  println()
+//  new PrintWriter(ASSEMBLY_PATH) {
+//    write(AsmGen.toString)
+//    close()
+//  }
+//
+//  println(List(tokens.mkString(" "), parsedFile.mkString("\n\n"), module.format(0)).mkString("-" * 128 + "\n\n", "\n\n" + "-" * 128 + "\n\n", "\n\n" + "-" * 128))
+//} catch {
+//  case error: (Error | ErrorGroup) =>
+//    error.printStackTrace()
+//    print("\n" * 8)
+//    print(error)
+//}
 
-  println(List(tokens.mkString(" "), parsedFile.mkString("\n\n"), module.format(0)).mkString("-" * 128 + "\n\n", "\n\n" + "-" * 128 + "\n\n", "\n\n" + "-" * 128))
-} catch {
-  case error: (Error | ErrorGroup) =>
-    error.printStackTrace()
-    print("\n" * 8)
-    print(error)
+@main def main(): Unit = {
+  println(opt.fn.format())
 }
