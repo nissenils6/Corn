@@ -11,17 +11,19 @@ abstract class Var {
   def range: FilePosRange
 
   def datatype: Datatype
-  
+
   def constVal: Option[ConstVal]
 }
 
 abstract class GlobalVar extends Var {
   def constVal: Option[ConstVal]
 
-  lazy val label: Option[String] = if datatype.runtime then constVal match {
-    case Some(value) => Some(AsmGen.data(value)._1)
-    case None => Some(AsmGen.bss(datatype.size, datatype.align)._1)
-  } else None
+//  lazy val label: Option[String] = if datatype.runtime then constVal match {
+//    case Some(value) => Some(AsmGen.data(value))
+//    case None => Some(AsmGen.bss(datatype.size, datatype.align))
+//  } else None
+
+  lazy val label: Option[String] = if datatype.runtime then Some(AsmGen.bss(datatype.size.roundUp(8), datatype.align)) else None
 }
 
 class BuiltinGlobalVar(module: => Module, val name: String, value: ConstVal) extends GlobalVar {
@@ -43,7 +45,7 @@ class UserGlobalVarInit(module: => Module, expr: syn.Expr, pattern: => Pattern[U
   lazy val analyzedPattern: Pattern[UserGlobalVar] = pattern
 
   def typeCheck(): Unit = {
-    if (analyzedPattern.datatype !~= analyzedExpr.returnType) throw Error.typeMismatch(analyzedExpr.returnType, analyzedPattern.datatype, analyzedExpr.range, analyzedPattern.range)
+    if (analyzedExpr.returnType !~=> analyzedPattern.datatype) throw Error.typeMismatch(analyzedExpr.returnType, analyzedPattern.datatype, analyzedExpr.range, analyzedPattern.range)
   }
 
   def format(indentation: Int): String = s"${analyzedExpr.constVal.map(value => s"${" " * indentation}[CONST: ${value.toString}]\n").getOrElse("")}${" " * indentation}${pattern.format(indentation)} = ${analyzedExpr.format(indentation)};"
@@ -96,17 +98,20 @@ class UserFun(val module: Module, parameters: List[syn.Pattern], retTypeExpr: Op
     (args, Pattern.verify(params.flatten))
   }
 
-  lazy val analyzedExpr: Expr = analyzeExpr(new ExprParsingContext(module, Some(this)))(expr)
+  lazy val analyzedExpr: Expr = {
+    val analyzedExpr = analyzeExpr(new ExprParsingContext(module, Some(this)))(expr)
+    for {
+      returnType <- annotatedReturnType
+      if analyzedExpr.returnType !~=> returnType
+    } throw Error.typeMismatch(analyzedExpr.returnType, returnType, analyzedExpr.range, retTypeExpr.get.range)
+    analyzedExpr
+  }
 
   lazy val argTypes: List[Datatype] = args.map(_.datatype)
 
-  lazy val returnType: Datatype = retTypeExpr match {
-    case Some(retTypeExpr) =>
-      val returnType = analyzeExpr(new ExprParsingContext(module, None))(retTypeExpr).constDatatype
-      // if (returnType != analyzedExpr.returnType) throw Error.typeMismatch(analyzedExpr.returnType, returnType, analyzedExpr.range, retTypeExpr.range)
-      returnType
-    case None => analyzedExpr.returnType
-  }
+  lazy val annotatedReturnType: Option[Datatype] = retTypeExpr.map(analyzeExpr(new ExprParsingContext(module, None))(_).constDatatype)
+
+  lazy val returnType: Datatype = annotatedReturnType.getOrElse(analyzedExpr.returnType)
 
   override def format(indentation: Int): String = s"fn(${args.map(_.format(indentation)).mkString(", ")}): $returnType => ${analyzedExpr.format(indentation)}"
 

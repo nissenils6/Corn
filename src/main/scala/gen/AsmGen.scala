@@ -14,12 +14,14 @@ abstract class Instr {
     case Mov(dst, src, _) => dst == src
     case _ => false
   }
+
   override def toString: String = withComment(this match {
     case Label(label, _) => s"$label:"
     case _ =>
       val (instr, operands) = format
       " " * 8 + instr.padTo(8, ' ') + operands
   })
+
   def format: (String, String) = this match {
     case SimpleOpReg(op, dst, src, _) => (op.name, s"$dst, $src")
     case SimpleOpImm(op, dst, imm, _) => (op.name, s"$dst, $imm")
@@ -315,25 +317,25 @@ object AsmGen {
     windowsFunctionNamesBuilder.append(" " * 8).append(s"${DEFINE_BYTE}0, 0, '$functionName', 0\n")
     functionName
   }
-  def bss(size: Int, align: Int = 1): (String, String) = bssSection.append(s"$DEFINE_BYTE$size dup(?)", align)
+  def bss(size: Int, align: Int = 1): String = bssSection.append(s"$DEFINE_BYTE$size dup(?)\n", align)
 
-  def constBytes(data: List[Int]): (String, String) = constSection.append(s"$DEFINE_BYTE${data.map(b => s"$b")}", 1)
-  def constQWords(data: List[Long]): (String, String) = constSection.append(s"$DEFINE_QWORD${data.map(l => s"$l")}", 8)
-  def const(constVal: ConstVal): (String, String) = constSection.append(mapConstVal(constVal), constVal.datatype.align)
+  def constBytes(data: List[Int]): String = constSection.append(s"$DEFINE_BYTE${data.map(b => s"$b")}\n", 1)
+  def constQWords(data: List[Long]): String = constSection.append(s"$DEFINE_QWORD${data.map(l => s"$l")}\n", 8)
+  def const(constVal: ConstVal): String = constSection.append(mapConstVal(constVal))
 
-  def dataBytes(data: List[Int]): (String, String) = dataSection.append(s"$DEFINE_BYTE${data.map(b => s"$b")}", 1)
-  def dataQWords(data: List[Long]): (String, String) = dataSection.append(s"$DEFINE_QWORD${data.map(l => s"$l")}", 8)
-  def data(constVal: ConstVal): (String, String) = dataSection.append(mapConstVal(constVal), constVal.datatype.align)
+  def dataBytes(data: List[Int]): String = dataSection.append(s"$DEFINE_BYTE${data.map(b => s"$b")}\n", 1)
+  def dataQWords(data: List[Long]): String = dataSection.append(s"$DEFINE_QWORD${data.map(l => s"$l")}\n", 8)
+  def data(constVal: ConstVal): String = dataSection.append(mapConstVal(constVal))
 
   private def mapConstVal(constVal: ConstVal): String = constVal match {
     case ConstUnit => ""
     case ConstInt(int) => s"$DEFINE_QWORD$int\n"
-    case ConstBool(bool) => s"$DEFINE_BYTE$bool\n"
+    case ConstBool(bool) => s"$DEFINE_BYTE${if bool then 1 else 0}\n"
     case ConstTuple(elements) => elements.map(mapConstVal).mkString
     case ConstFunction(function) => s"$DEFINE_QWORD${function.label}\n"
   } match {
     case "" => ""
-    case string => s"align ${constVal.datatype.align}\n" + string
+    case string => s"align ${constVal.datatype.align}\n${" " * 8}$string"
   }
 
   override def toString: String = mutable.StringBuilder()
@@ -361,18 +363,25 @@ object AsmGen {
   }
 
   class Section(initial: String, labelChar: Char) {
-    val builder: mutable.StringBuilder = mutable.StringBuilder(s"$initial\n\n${labelChar}0:\n")
+    val builder: mutable.StringBuilder = mutable.StringBuilder(s"$initial\n\n")
     var count: Int = 0
 
-    def append(string: String, align: Int): (String, String) = {
+    def append(string: String, align: Int): String = {
+      val label = s"$labelChar$count"
+      count += 1
+      builder.append(s"$label:\n")
       if (align > 1)
         builder.append(s"align $align\n")
-      val beforeLabel = s"$labelChar$count"
-      count += 1
-      val afterLabel = s"$labelChar$count"
       builder.append(" " * 8).append(string).append('\n')
-      builder.append(s"$labelChar$count:\n")
-      (beforeLabel, afterLabel)
+      label
+    }
+
+    def append(string: String): String = {
+      val label = s"$labelChar$count"
+      count += 1
+      builder.append(s"$label:\n")
+      builder.append(string)
+      label
     }
 
     override def toString: String = if count > 0 then s"$builder\n" else ""

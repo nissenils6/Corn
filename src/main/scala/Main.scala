@@ -21,6 +21,8 @@ def time[T](name: String, expr: => T): T = {
   value
 }
 
+// while loops, heap allocation, closures, partial application, optimization, structs, unions, generics, builtin datatypes, io, for comprehensions, match expressions
+
 @main def main(): Unit = try {
   val file = File(SOURCE_PATH)
   val tokens = time("Lexical Analysis", tokenize(file))

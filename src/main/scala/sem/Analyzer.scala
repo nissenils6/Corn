@@ -116,13 +116,13 @@ def builtinVars(module: => Module): List[GlobalVar] = List(
       val loopLabel = AsmGen.label()
       val noMinusLabel = AsmGen.label()
 
-      val (_, bufferEndLabel) = AsmGen.bss(32)
+      val bufferLabel = AsmGen.bss(32)
       AsmGen.windowsFunction("WriteFile")
       AsmGen.windowsFunction("GetStdHandle")
 
       List(
         Load(Reg.RAX, Address(Reg.RBP)),
-        Lea(Reg.RBX, Address(bufferEndLabel)),
+        Lea(Reg.RBX, Address(bufferLabel) + 32),
         Sub(Reg.RBX, 1),
         StoreImm(Address(Reg.RBX), 10, RegSize.Byte),
 
@@ -154,7 +154,7 @@ def builtinVars(module: => Module): List[GlobalVar] = List(
         IndCall(Address("GetStdHandle")),
         Mov(Reg.RCX, Reg.RAX),
         Mov(Reg.RDX, Reg.RBX),
-        Lea(Reg.R8, Address(bufferEndLabel)),
+        Lea(Reg.R8, Address(bufferLabel) + 32),
         Sub(Reg.R8, Reg.RBX),
         Lea(Reg.R9, Reg.RSP + 32),
         StoreImm(Reg.RSP + 32, 0),
@@ -179,7 +179,7 @@ def analyzeFile(stmts: List[syn.GlobalStmt], file: File): Module = {
 
   module.varInits.foreach(_.typeCheck())
 
-  val (secondaryStack, _) = AsmGen.bss(1024 * 256, 16)
+  val secondaryStack = AsmGen.bss(1024 * 256, 16)
 
   val ctx = new ExprCodeGenContext()
 
@@ -188,10 +188,14 @@ def analyzeFile(stmts: List[syn.GlobalStmt], file: File): Module = {
     case TuplePattern(elements, _) => elements.zip(Datatype.alignSequence(elements.map(_.datatype))._3.map(_ + offset)).foreach(iterateUserGlobalVars.tupled)
   }
 
-  module.varInits.foreach(varInit => if (varInit.analyzedExpr.constVal.isEmpty) {
+  for {
+    varInit <- module.varInits
+    if varInit.analyzedExpr.returnType.runtime
+  } {
+    ctx.secondaryOffset = 0
     varInit.analyzedExpr.generateCode(ctx)
     iterateUserGlobalVars(varInit.analyzedPattern, 0)
-  })
+  }
 
   val initFunction = AsmGen.functionLabel()
   AsmGen.function(initFunction, ctx.code ::: List(Ret()))

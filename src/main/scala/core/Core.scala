@@ -79,52 +79,48 @@ case class File(filePath: String) {
   val newlines: Array[Int] = (for {
     (char, index) <- source.zipWithIndex
     if char == '\n'
-  } yield index).toArray
+  } yield index).toArray match {
+    case array => Array(-1).concat(array).concat(Array(source.length))
+  }
 
   def lastRange: FilePosRange = FilePosRange(source.length, source.length + 1, this)
 }
 
 case class FilePosRange(start: Int, end: Int, file: File) {
-  def +(int: Int): FilePosRange = FilePosRange(start + int, end + int, file)
-
-  def -(int: Int): FilePosRange = FilePosRange(start - int, end - int, file)
-
-  def to(range: FilePosRange): FilePosRange = FilePosRange(start.min(range.start), end.max(range.end), file)
+  @targetName("union")
+  def |(range: FilePosRange): FilePosRange = FilePosRange(start.min(range.start), end.max(range.end), file)
 
   def after: FilePosRange = FilePosRange(end, end + 1, file)
 
   override def toString: String = s"$start..$end"
 
   def underline(underlineChar: Char, message: Option[String] = None): String = {
-    val startLine = file.newlines.lastIndexWhere(_ < start) match {
-      case -1 => 0
-      case num => num
-    }
-    val endLine = file.newlines.indexWhere(_ >= end) match {
-      case -1 => file.newlines.length
-      case num => num
-    }
+    val lineNumberSpace = 6
 
-    val startIndex = file.newlines.findLast(_ < start).getOrElse(0)
-    val endIndex = file.newlines.find(_ >= end).getOrElse(file.source.length)
+    def line(lineNumber: Int) = {
+      val lineStart = file.newlines(lineNumber) + 1
+      val lineEnd = file.newlines(lineNumber + 1)
 
-    var lineNum = startLine + 1
-    val lineNumSpace = math.log10(endLine + 2).ceil.toInt + 2
+      val startIndex = start.max(lineStart)
+      val endIndex = end.min(lineEnd)
 
-    val (code, under) = file.source.substring(startIndex, endIndex).zipWithIndex.flatMap {
-      case ('\n', _) => ('\n', '\n') :: (s"${lineNum += 1; lineNum}:".padTo(lineNumSpace, ' ') + "| ").toList.zip((" " * lineNumSpace + "| ").toList)
-      case ('\t', index) if start until end contains (startIndex + index) => List.fill(4)((' ', underlineChar))
-      case (char, index) if start until end contains (startIndex + index) => List((char, underlineChar))
-      case ('\t', _) => List.fill(4)((' ', ' '))
-      case (char, _) => List((char, ' '))
-    }.unzip match {
-      case (code, under) if startIndex == 0 => ("1:".padTo(lineNumSpace, ' ') + "| " + code.mkString, " " * lineNumSpace + "| " + under.mkString)
-      case (code, under) => (code.mkString, under.mkString)
+      val lineString = file.source.substring(lineStart, lineEnd).replace('\t', ' ')
+      val underlineString = (" " * (startIndex - lineStart)) + (underlineChar.toString * (endIndex - startIndex))
+
+      val fullLineString = s"${lineNumber + 1}:".padTo(lineNumberSpace, ' ') + "| " + lineString
+      val fullUnderlineString = s"${" " * lineNumberSpace}| $underlineString"
+
+      s"$fullLineString\n$fullUnderlineString"
     }
 
-    val string = code.split("\n+").zip(under.split("\n+")).filter(t => t._1.length + t._2.length > 0).map(t => s"${t._1}\n${t._2}").mkString("\n")
+    val startLine = file.newlines.lastIndexWhere(_ < start)
+    val endLine = file.newlines.indexWhere(_ >= end)
 
-    val indentation = " " * lineNumSpace + "| " + (if startLine == endLine - 1 then " " * (start - startIndex - 1 + file.source.substring(startIndex, start).count(_ == '\t') * 3) else "")
-    s"$string${message.map(_.split('\n')).getOrElse(Array[String]()).map(msgLine => s"\n$indentation$msgLine").mkString}"
+    val content = (startLine until endLine).map(line).mkString("\n")
+    message match {
+      case Some(message) if startLine + 1 == endLine => s"$content\n${" " * lineNumberSpace}| ${" " * (start - file.newlines(startLine) - 1)}$message"
+      case Some(message) => s"$content\n${" " * lineNumberSpace}| $message"
+      case None => content
+    }
   }
 }

@@ -133,47 +133,47 @@ private def parseExpr(precedence: Int)(state: ParserState): (Expr, ParserState) 
   case KeywordToken("false", range) :: rest => parseExprAfter(precedence)(BoolExpr(false, range), state withTokens rest)
   case KeywordToken("const", range) :: rest =>
     val (subExpr: Expr, newState: ParserState) = parseExpr(lex.MAX_PRECEDENCE)(state withTokens rest)
-    parseExprAfter(precedence)(MutExpr(subExpr, false, range to subExpr.range, range), newState)
+    parseExprAfter(precedence)(MutExpr(subExpr, false, range | subExpr.range, range), newState)
   case KeywordToken("mut", range) :: rest =>
     val (subExpr: Expr, newState: ParserState) = parseExpr(lex.MAX_PRECEDENCE)(state withTokens rest)
-    parseExprAfter(precedence)(MutExpr(subExpr, true, range to subExpr.range, range), newState)
+    parseExprAfter(precedence)(MutExpr(subExpr, true, range | subExpr.range, range), newState)
   case KeywordToken("ref", range) :: rest =>
     val (subExpr: Expr, newState: ParserState) = parseExpr(lex.MAX_PRECEDENCE)(state withTokens rest)
-    parseExprAfter(precedence)(RefExpr(subExpr, range to subExpr.range), newState)
+    parseExprAfter(precedence)(RefExpr(subExpr, range | subExpr.range), newState)
   case KeywordToken("val", range) :: rest =>
     val (subExpr: Expr, newState: ParserState) = parseExpr(lex.MAX_PRECEDENCE)(state withTokens rest)
-    parseExprAfter(precedence)(ValExpr(subExpr, range to subExpr.range), newState)
+    parseExprAfter(precedence)(ValExpr(subExpr, range | subExpr.range), newState)
   case SymbolToken("(", startRange) :: exprTokens =>
     val (exprs, newState, endRange) = parseSep(state withTokens exprTokens, parseExpr(0), ",", ")", "expression")
     newState.tokens match {
       case SymbolToken("=>", _) :: returnTypeTokens if lex.FUN_TYPE_LIT_PRECEDENCE >= precedence =>
         val (returnTypeExpr, lastState) = parseExpr(0)(newState withTokens returnTypeTokens)
-        (FunTypeExpr(exprs, returnTypeExpr, startRange to returnTypeExpr.range), lastState)
+        (FunTypeExpr(exprs, returnTypeExpr, startRange | returnTypeExpr.range), lastState)
       case _ => parseExprAfter(precedence)(exprs match {
-        case List() => UnitExpr(startRange to endRange)
+        case List() => UnitExpr(startRange | endRange)
         case List(expr) => expr
-        case exprList => TupleExpr(exprList, startRange to endRange)
+        case exprList => TupleExpr(exprList, startRange | endRange)
       }, newState)
     }
   case SymbolToken("{", startRange) :: exprTokens =>
     val (body, newState, endRange) = parseSep(state withTokens exprTokens, parseStmt, ";", "}", "expression")
     val lastExpr = body.lastOption.getOrElse(UnitExpr(endRange))
     val exprs = body.dropRight(1)
-    parseExprAfter(precedence)(BlockExpr(exprs, lastExpr, startRange to endRange), newState)
+    parseExprAfter(precedence)(BlockExpr(exprs, lastExpr, startRange | endRange), newState)
   case KeywordToken("let", startRange) :: patternTokens =>
     val (pattern, newState) = parsePattern(state withTokens patternTokens)
     val (expr, lastState) = parseExpr(0)(newState.expectSymbol("="))
-    (LetExpr(pattern, expr, startRange to expr.range), lastState)
+    (LetExpr(pattern, expr, startRange | expr.range), lastState)
   case KeywordToken("fn", startRange) :: SymbolToken("(", _) :: parameterTokens =>
     val (parameters, newState, _) = parseSep(state withTokens parameterTokens, parsePattern, ",", ")", "pattern")
     newState.tokens match {
       case SymbolToken(":", _) :: retTypeTokens =>
         val (returnType, exprState) = parseExpr(lex.FUN_TYPE_LIT_PRECEDENCE + 1)(newState withTokens retTypeTokens)
         val (expr, lastState) = parseExpr(0)(exprState.expectSymbol("=>"))
-        (FunExpr(parameters, Some(returnType), expr, startRange to expr.range), lastState)
+        (FunExpr(parameters, Some(returnType), expr, startRange | expr.range), lastState)
       case _ =>
         val (expr, lastState) = parseExpr(0)(newState.expectSymbol("=>"))
-        (FunExpr(parameters, None, expr, startRange to expr.range), lastState)
+        (FunExpr(parameters, None, expr, startRange | expr.range), lastState)
     }
   case KeywordToken("if", startRange) :: conditionTokens =>
     val (conditionExpr, bodyState) = parseExpr(0)(state withTokens conditionTokens)
@@ -181,8 +181,8 @@ private def parseExpr(precedence: Int)(state: ParserState): (Expr, ParserState) 
     elseState.tokens match {
       case KeywordToken("else", _) :: elseTokens =>
         val (elseBodyExpr, lastState) = parseExpr(0)(elseState withTokens elseTokens)
-        parseExprAfter(0)(IfExpr(conditionExpr, bodyExpr, elseBodyExpr, startRange to elseBodyExpr.range), lastState)
-      case _ => parseExprAfter(0)(IfExpr(conditionExpr, bodyExpr, UnitExpr(FilePosRange(bodyExpr.range.end, bodyExpr.range.end + 1, bodyExpr.range.file)), startRange to bodyExpr.range), elseState)
+        parseExprAfter(0)(IfExpr(conditionExpr, bodyExpr, elseBodyExpr, startRange | elseBodyExpr.range), lastState)
+      case _ => parseExprAfter(0)(IfExpr(conditionExpr, bodyExpr, UnitExpr(FilePosRange(bodyExpr.range.end, bodyExpr.range.end + 1, bodyExpr.range.file)), startRange | bodyExpr.range), elseState)
     }
   case token :: _ => throw Error.unexpected(token, "expression")
   case _ => throw Error.unexpected("expression", state.file)
@@ -192,35 +192,35 @@ private def parseExpr(precedence: Int)(state: ParserState): (Expr, ParserState) 
 private def parseExprAfter(precedence: Int)(expr: Expr, state: ParserState): (Expr, ParserState) = state.tokens match {
   case SymbolToken(".", _) :: IdenToken(op, opRange) :: SymbolToken("(", _) :: argumentTokens =>
     val (exprs, newState, endRange) = parseSep(state withTokens argumentTokens, parseExpr(0), ",", ")", "expression")
-    parseExprAfter(precedence)(CallExpr(IdenExpr(op, opRange), expr :: exprs, expr.range to endRange), newState)
-  case SymbolToken(".", _) :: IdenToken(iden, idenRange) :: rest => parseExprAfter(precedence)(DotExpr(expr, iden, expr.range to idenRange), state withTokens rest)
+    parseExprAfter(precedence)(CallExpr(IdenExpr(op, opRange), expr :: exprs, expr.range | endRange), newState)
+  case SymbolToken(".", _) :: IdenToken(iden, idenRange) :: rest => parseExprAfter(precedence)(DotExpr(expr, iden, expr.range | idenRange), state withTokens rest)
   case (idenToken: IdenToken) :: rightExprTokens if idenToken.precedence > precedence =>
     val (rightExpr: Expr, rest: ParserState) = parseExpr(idenToken.precedence)(state withTokens rightExprTokens)
-    parseExprAfter(precedence)(CallExpr(IdenExpr(idenToken.iden, idenToken.range), List(expr, rightExpr), expr.range to rightExpr.range), rest)
+    parseExprAfter(precedence)(CallExpr(IdenExpr(idenToken.iden, idenToken.range), List(expr, rightExpr), expr.range | rightExpr.range), rest)
   case SymbolToken("(", _) :: argumentTokens =>
     val (exprs, newState, endRange) = parseSep(state withTokens argumentTokens, parseExpr(0), ",", ")", "expression")
-    parseExprAfter(precedence)(CallExpr(expr, exprs, expr.range to endRange), newState)
+    parseExprAfter(precedence)(CallExpr(expr, exprs, expr.range | endRange), newState)
   case SymbolToken("=>", _) :: returnTypeTokens if lex.FUN_TYPE_LIT_PRECEDENCE >= precedence =>
     val (returnTypeExpr, lastState) = parseExpr(lex.FUN_TYPE_LIT_PRECEDENCE)(state withTokens returnTypeTokens)
-    (FunTypeExpr(List(expr), returnTypeExpr, expr.range to returnTypeExpr.range), lastState)
+    (FunTypeExpr(List(expr), returnTypeExpr, expr.range | returnTypeExpr.range), lastState)
   case SymbolToken("=", _) :: exprTokens if lex.ASSIGNMENT_PRECEDENCE >= precedence =>
     val (subExpr, lastState) = parseExpr(lex.ASSIGNMENT_PRECEDENCE)(state withTokens exprTokens)
-    (AssignExpr(expr, subExpr, expr.range to subExpr.range), lastState)
+    (AssignExpr(expr, subExpr, expr.range | subExpr.range), lastState)
   case _ => (expr, state)
 }
 
 private def parsePattern(state: ParserState): (Pattern, ParserState) = state.tokens match {
   case IdenToken(name, nameRange) :: SymbolToken(":", _) :: rest =>
     val (expr, newState) = parseExpr(lex.ASSIGNMENT_PRECEDENCE + 1)(state withTokens rest)
-    (VarPattern(name, Some(expr), nameRange to expr.range), newState)
+    (VarPattern(name, Some(expr), nameRange | expr.range), newState)
   case IdenToken(name, nameRange) :: rest =>
     (VarPattern(name, None, nameRange), state withTokens rest)
   case SymbolToken("(", startRange) :: rest =>
     val (patterns, newState, endRange) = parseSep(state withTokens rest, parsePattern, ",", ")", "pattern")
     patterns match {
-      case List() => throw Error.todo(startRange to endRange)
+      case List() => throw Error.todo(startRange | endRange)
       case List(pattern) => (pattern, newState)
-      case patterns => (TuplePattern(patterns, startRange to endRange), newState)
+      case patterns => (TuplePattern(patterns, startRange | endRange), newState)
     }
   case token :: _ => throw Error.unexpected(token, "pattern")
   case _ => throw Error.unexpected("pattern", state.file)
@@ -230,7 +230,7 @@ private def parseGlobalStmt(state: ParserState): (GlobalStmt, ParserState) = sta
   case patternTokens =>
     val (pattern, newState) = parsePattern(state withTokens patternTokens)
     val (expr, lastState) = parseExpr(0)(newState.expectSymbol("="))
-    (GlobalStmt(pattern, expr, pattern.range to expr.range), lastState)
+    (GlobalStmt(pattern, expr, pattern.range | expr.range), lastState)
 }
 
 @tailrec

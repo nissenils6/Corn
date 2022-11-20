@@ -20,21 +20,22 @@ abstract class Datatype {
   }
 
   lazy val (runtime: Boolean, compiletime: Boolean) = this match {
-    case UnitDatatype(_) | IntDatatype(_) | BoolDatatype(_) | RefDatatype(_, _) | FunDatatype(_, _, _) => (true, true)
+    case UnitDatatype(_) | IntDatatype(_) | BoolDatatype(_) | RefDatatype(_, _) => (true, true)
     case TypeDatatype(_) => (false, true)
     case TupleDatatype(elements, _) => (elements.forall(_.runtime), elements.forall(_.compiletime))
+    case FunDatatype(params, returnType, _) => (returnType.runtime && params.forall(_.runtime), returnType.compiletime && params.forall(_.compiletime))
   }
 
   @targetName("implicitCast")
-  def ~=(datatype: Datatype): Boolean = (this, datatype) match {
-    case (RefDatatype(datatype1, _), RefDatatype(datatype2, _)) => datatype1 == datatype2
-    case (TupleDatatype(elements1, _), TupleDatatype(elements2, _)) => elements1.zip(elements2).forall { (d1, d2) => d1 ~= d2 }
+  def ~=>(datatype: Datatype): Boolean = (this, datatype) match {
+    case (RefDatatype(datatype1, _), RefDatatype(datatype2, _)) => (datatype1 ~=> datatype2) && (!datatype2.mutable || datatype1.mutable)
+    case (TupleDatatype(elements1, _), TupleDatatype(elements2, _)) => elements1.zip(elements2).forall { (d1, d2) => d1 ~=> d2 }
     case (FunDatatype(_, _, _), FunDatatype(_, _, _)) => this == datatype
     case (_, _) => getClass == datatype.getClass
   }
 
   @targetName("notImplicitCast")
-  def !~=(datatype: Datatype): Boolean = !(this ~= datatype)
+  def !~=>(datatype: Datatype): Boolean = !(this ~=> datatype)
 
   def withMut(mutable: Boolean): Datatype = this match {
     case UnitDatatype(_) => UnitDatatype(mutable)
@@ -119,7 +120,7 @@ abstract class ConstVal {
       constVal <- localVar.constVal
       constType <- constVal.toType
     } yield RefDatatype(constType, false)
-    case ConstTuple(elements) => elements.map(_.toType).extract.map(elements => TupleDatatype(elements, false)) // if elements.map(_.toType).forall(_.nonEmpty) Some(TupleDatatype(elements.map(_.toType.get), false))
+    case ConstTuple(elements) => elements.map(_.toType).extract.map(elements => TupleDatatype(elements, false))
     case ConstUnit => Some(UnitDatatype(false))
     case _ => None
   }
