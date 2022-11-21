@@ -7,12 +7,13 @@ import syn.{GlobalStmt, ParserState, parseFile}
 import java.io.PrintWriter
 import scala.languageFeature.implicitConversions
 
-private val ON_DEKSTOP = true
+private val ON_DEKSTOP = false
 
 private val PATH = if ON_DEKSTOP then "C:/Users/nisse/OneDrive/Skrivbord/Corn/TestCode" else "C:/Users/nisse/Desktop/Corn/TestCode"
 
 private val SOURCE_PATH = PATH + ".txt"
 private val ASSEMBLY_PATH = PATH + ".asm"
+private val DOT_PATH = PATH + ".dot.txt"
 
 def time[T](name: String, expr: => T): T = {
   val start = System.nanoTime
@@ -21,7 +22,7 @@ def time[T](name: String, expr: => T): T = {
   value
 }
 
-// while loops, heap allocation, closures, partial application, optimization, structs, unions, generics, builtin datatypes, io, for comprehensions, match expressions
+// optimization, while loops, heap allocation, closures, partial application, structs, unions, generics, builtin datatypes, io, for comprehensions, match expressions
 
 //@main def main(): Unit = try {
 //  val file = File(SOURCE_PATH)
@@ -43,5 +44,8 @@ def time[T](name: String, expr: => T): T = {
 //}
 
 @main def main(): Unit = {
-  println(opt.fn.format())
+  new PrintWriter(DOT_PATH) {
+    write(opt.fn.format())
+    close()
+  }
 }
