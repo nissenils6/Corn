@@ -2,6 +2,7 @@ package sem
 
 import core.*
 import gen.*
+import opt.Controlflow
 import syn.AssignExpr
 
 import scala.annotation.tailrec
@@ -280,6 +281,53 @@ abstract class Expr() {
 
       ctx.add(Label(endLabel))
     case MutExpr(_, _, _, range) => Error.todo("", range)
+  }
+
+  def generateIr(nextCtrl: opt.Controlflow, localVars: Map[LocalVar, Int], counter: Counter): (opt.Dataflow, opt.Controlflow) = this match {
+    case CallExpr(function, args, _, _) =>
+      lazy val (fnExprData, fnExprCtrl) = function.generateIr(argsCtrl, localVars, counter)
+      lazy val (argsCtrl: opt.Controlflow, argsData: List[opt.Dataflow]) = args.foldRight((callCtrl, List[opt.Dataflow]()))((arg, tuple) => {
+        val (ctrl, argsData) = tuple
+        lazy val (argData, argCtrl) = arg.generateIr(ctrl, localVars, counter)
+        (argCtrl, argData :: argsData)
+      })
+      lazy val callOp = opt.CallInd(fnExprData, argsData, nextCtrl)
+
+      lazy val callData = opt.Dataflow(() => Some(callOp))
+      lazy val callCtrl = opt.Controlflow(() => callOp)
+      (callData, fnExprCtrl)
+    case GlobalVarExpr(globalVar, _, _) => ???
+    case RefGlobalVarExpr(globalVar, _, _) => ???
+    case LocalVarExpr(localVar, _, _) => ???
+    case RefLocalVarExpr(localVar, _, _) => ???
+    case ValExpr(expr, _, _) => ???
+    case IntExpr(int, _, _) =>
+      lazy val intOp = opt.IntLit(int, nextCtrl)
+      lazy val intData = opt.Dataflow(() => Some(intOp))
+      lazy val intCtrl = opt.Controlflow(() => intOp)
+      (intData, intCtrl)
+    case BoolExpr(bool, _, _) =>
+      lazy val boolOp = opt.BoolLit(bool, nextCtrl)
+      lazy val boolData = opt.Dataflow(() => Some(boolOp))
+      lazy val boolCtrl = opt.Controlflow(() => boolOp)
+      (boolData, boolCtrl)
+    case TupleExpr(elements, _, _) => ???
+    case BlockExpr(exprs, lastExpr, vars, _, _) =>
+      val newLocalVars = if vars.nonEmpty then localVars.concat(vars.map(localVar => (localVar, counter.next))) else localVars
+      lazy val exprsCtrl: opt.Controlflow = exprs.foldRight(lastExprCtrl)((expr, ctrl) => {
+        expr.generateIr(ctrl, newLocalVars, counter)._2
+      })
+
+      lazy val (lastExprCtrl: opt.Controlflow, lastExprData: opt.Dataflow) = lastExpr.generateIr(nextCtrl, newLocalVars, counter)
+      (exprsCtrl, lastExprData)
+    case UnitExpr(_, _) => ???
+    case LetExpr(pattern, expr, _, _) => ???
+    case AssignExpr(left, right, _, _) => ???
+    case FunExpr(fun, _, _) => ???
+    case FunTypeExpr(parameters, returnType, _, _) => ???
+    case RefTypeExpr(expr, _, _) => ???
+    case IfExpr(condition, ifBlock, elseBlock, _, _) => ???
+    case MutExpr(expr, mutable, _, _) => ???
   }
 
   def format(indentation: Int): String = this match {

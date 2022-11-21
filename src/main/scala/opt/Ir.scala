@@ -8,6 +8,7 @@ abstract class Datatype {
 
 }
 
+case object UnitDatatype extends Datatype
 case object BoolDatatype extends Datatype
 case object IntDatatype extends Datatype
 case class TupleDatatype(elements: List[Datatype]) extends Datatype
@@ -17,8 +18,16 @@ case class Dataflow(valueLazy: () => Option[Op], idx: Int = 0) {
   lazy val value = valueLazy()
 }
 
+object Dataflow {
+  def unapply(dataflow: Dataflow): Option[(Option[Op], Int)] = Some((dataflow.value, dataflow.idx))
+}
+
 case class Controlflow(opLazy: () => Op) {
   lazy val op = opLazy()
+}
+
+object Controlflow {
+  def unapply(controlflow: Controlflow): Option[Op] = Some(controlflow.op)
 }
 
 def graph_node(main: Op)(label: String): String = s"Op_${main.id} [label = \"$label\"]"
@@ -68,8 +77,9 @@ abstract class Op {
   } else List()
 }
 
-case class IntLit(int: Int, next: Controlflow) extends Op
+case class UnitLit(next: Controlflow) extends Op
 case class BoolLit(bool: Boolean, next: Controlflow) extends Op
+case class IntLit(int: Long, next: Controlflow) extends Op
 case class AddInt(addInts: List[Dataflow], subInts: List[Dataflow], next: Controlflow) extends Op
 case class AndInt(ints: List[Dataflow], next: Controlflow) extends Op
 case class OrInt(ints: List[Dataflow], next: Controlflow) extends Op

@@ -124,3 +124,11 @@ case class FilePosRange(start: Int, end: Int, file: File) {
     }
   }
 }
+
+class Counter(var count: Int = 0) {
+  def next: Int = {
+    val number = count
+    count += 1
+    number
+  }
+}
