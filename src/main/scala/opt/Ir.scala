@@ -37,6 +37,11 @@ def graph_data_edge(main: Op)(dataflow: Dataflow): String = dataflow.value match
   case None => s"Par_${dataflow.idx} -> Op_${main.id} [color = purple]"
 }
 
+def graph_data_edge_sec(main: Op)(dataflow: Dataflow): String = dataflow.value match {
+  case Some(op) => s"Op_${op.id} -> Op_${main.id} [color = blue]"
+  case None => s"Par_${dataflow.idx} -> Op_${main.id} [color = blue]"
+}
+
 def graph_data_edge_label(main: Op)(label: String)(dataflow: Dataflow): String = dataflow.value match {
   case Some(op) => s"Op_${op.id} -> Op_${main.id} [color = purple, label = \"$label\"]"
   case None => s"Par_${dataflow.idx} -> Op_${main.id} [color = purple, label = '\"$label\"]"
@@ -46,7 +51,7 @@ def graph_ctrl_edge(main: Op)(controlflow: Controlflow): String = s"Op_${main.id
 
 def graph_ctrl_edge_sec(main: Op)(controlflow: Controlflow): String = s"Op_${main.id} -> Op_${controlflow.op.id} [color = red]"
 
-def graph_phi_edge(main: Op)(controlflow: Controlflow): String = s"Op_${main.id} -> Op_${controlflow.op.id} [color = green]"
+def graph_phi_edge(main: Op)(branch: Branch): String = s"Op_${main.id} -> Op_${branch.id} [color = green]"
 
 abstract class Op {
   lazy val id = (math.random() * 1e15).toLong
@@ -56,6 +61,7 @@ abstract class Op {
 
     val node = graph_node(this)
     val data_edge = graph_data_edge(this)
+    val data_edge_sec = graph_data_edge_sec(this)
     val data_edge_label = graph_data_edge_label(this)
     val ctrl_edge = graph_ctrl_edge(this)
     val ctrl_edge_sec = graph_ctrl_edge_sec(this)
@@ -72,6 +78,18 @@ abstract class Op {
       case DivInt(dividend, divisor, next) => node("/") :: ctrl_edge(next) :: data_edge_label("Dividend")(dividend) :: data_edge_label("Divisor")(divisor) :: next.op.format(formatted)
       case ModInt(dividend, divisor, next) => node("%") :: ctrl_edge(next) :: data_edge_label("Dividend")(dividend) :: data_edge_label("Divisor")(divisor) :: next.op.format(formatted)
       case Branch(condition, ifTrue, ifFalse) => node("branch") :: data_edge(condition) :: ctrl_edge(ifTrue) :: ctrl_edge_sec(ifFalse) :: (ifTrue.op.format(formatted) ::: ifFalse.op.format(formatted))
+      case Phi(branch, ifTrue, ifFalse, next) => node("phi") :: phi_edge(branch) :: data_edge(ifTrue) :: data_edge_sec(ifFalse) :: next.op.format(formatted)
+      case TupleIdx(tuple, idx, next) => node(s"Tuple[$idx]") :: data_edge(tuple) :: next.op.format(formatted)
+      case ReadRef(ref, next) => ???
+      case WriteRef(ref, data, next) => ???
+      case ReadLocal(local, next) => ???
+      case WriteLocal(local, data, next) => ???
+      case RefLocal(local, next) => ???
+      case ReadGlobal(global, next) => ???
+      case WriteGlobal(global, data, next) => ???
+      case RefGlobal(global, next) => ???
+      case Call(fn, values, next) => ???
+      case CallInd(fn, values, next) => ???
       case Ret(returnValues) => node("return") :: returnValues.map(data_edge)
     }
   } else List()
@@ -114,7 +132,7 @@ def fn: Fn = {
   lazy val add: AddInt = AddInt(List(int1data, int2data), List(), int3ctrl)
   lazy val int3: IntLit = IntLit(8, multctrl)
   lazy val mult: MultInt = MultInt(List(int3data, adddata), retctrl)
-  lazy val ret: Ret = Ret(List(adddata))
+  lazy val ret: Ret = Ret(List(multdata))
 
   lazy val int1ctrl: Controlflow = Controlflow(() => int1)
   lazy val int2ctrl: Controlflow = Controlflow(() => int2)

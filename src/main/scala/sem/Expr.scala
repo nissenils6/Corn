@@ -318,9 +318,9 @@ abstract class Expr() {
         expr.generateIr(ctrl, newLocalVars, counter)._2
       })
 
-      lazy val (lastExprCtrl: opt.Controlflow, lastExprData: opt.Dataflow) = lastExpr.generateIr(nextCtrl, newLocalVars, counter)
+      lazy val (lastExprData: opt.Dataflow, lastExprCtrl: opt.Controlflow) = lastExpr.generateIr(nextCtrl, newLocalVars, counter)
       (lastExprData, exprsCtrl)
-    case UnitExpr(_, _) => ???
+    case UnitExpr(_, _) =>
       lazy val unitOp: opt.Op = opt.UnitLit(nextCtrl)
       lazy val unitData: opt.Dataflow = opt.Dataflow(() => Some(unitOp))
       lazy val unitCtrl: opt.Controlflow = opt.Controlflow(() => unitOp)
