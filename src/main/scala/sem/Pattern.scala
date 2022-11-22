@@ -21,6 +21,24 @@ case class VarPattern[T <: Var](patternVar: T, range: FilePosRange) extends Patt
 
 case class TuplePattern[T <: Var](elements: List[Pattern[T]], range: FilePosRange) extends Pattern[T]
 
+object Pattern {
+  def generateIr(pattern: Pattern[LocalVar], expr: opt.Dataflow, nextCtrl: opt.Controlflow, localVars: Map[LocalVar, Int]): opt.Controlflow = pattern match {
+    case VarPattern(patternVar, _) =>
+      lazy val writeOp = opt.WriteLocal(localVars(patternVar), expr, nextCtrl)
+      lazy val writeCtrl = opt.Controlflow(() => writeOp)
+      writeCtrl
+    case TuplePattern(elements, _) =>
+      lazy val tupleCtrl = elements.zipWithIndex.foldRight(nextCtrl)((tuple, ctrl) => {
+        val (subPattern, index) = tuple
+        lazy val idxOp = opt.TupleIdx(expr, index, patternCtrl)
+        lazy val patternCtrl = generateIr(subPattern, idxData, ctrl, localVars)
+        lazy val idxCtrl = opt.Controlflow(() => idxOp)
+        lazy val idxData = opt.Dataflow(() => Some(idxOp))
+        idxCtrl
+      })
+  }
+}
+
 abstract class PatternNav {
   def const(constVal: ConstVal): ConstVal = this match {
     case VarPatternNav => constVal
