@@ -34,6 +34,27 @@ abstract class Expr() {
     case MutExpr(_, _, _, _) => TypeDatatype(false)
   }
 
+  lazy val runtime: Boolean = this match {
+    case CallExpr(function, args, _, _) => function.runtime && args.forall(_.runtime)
+    case GlobalVarExpr(globalVar, _, _) => globalVar.runtime
+    case RefGlobalVarExpr(globalVar, _, _) => globalVar.runtime
+    case LocalVarExpr(localVar, _, _) => localVar.runtime
+    case RefLocalVarExpr(localVar, _, _) => localVar.runtime
+    case ValExpr(expr, _, _) => expr.runtime
+    case IntExpr(_, _, _) => true
+    case BoolExpr(_, _, _) => true
+    case TupleExpr(elements, _, _) => elements.forall(_.runtime)
+    case BlockExpr(exprs, lastExpr, _, _, _) => lastExpr.runtime && exprs.forall(_.runtime)
+    case UnitExpr(_, _) => true
+    case LetExpr(_, expr, _, _) => expr.runtime
+    case AssignExpr(_, expr, _, _) => expr.runtime
+    case FunExpr(fun, _, _) => fun.runtime
+    case FunTypeExpr(_, _, _, _) => false
+    case RefTypeExpr(_, _, _) => false
+    case IfExpr(condition, ifBlock, elseBlock, _, _) => condition.runtime && ifBlock.runtime && elseBlock.runtime
+    case MutExpr(_, _, _, _) => false
+  }
+
   lazy val constVal: Option[ConstVal] = this match {
     case CallExpr(function, args, _, _) => for {
       fun <- function.constVal
@@ -401,6 +422,8 @@ class LocalVar(val module: Module, val name: String, letExpr: => Option[LetExpr]
     case None => throw Error.todo(module.file)
   }))
   lazy val constVal: Option[ConstVal] = if datatype.mutable then None else letExpr.flatMap(_.constVal.map(patternNav.const))
+
+  lazy val runtime: Boolean = datatype.runtime && letExpr.forall(_.runtime)
 }
 
 def overload(vars: List[Var], funRange: FilePosRange, args: List[Expr]): Option[(Var, List[Expr])] = {

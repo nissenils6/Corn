@@ -18,11 +18,10 @@ abstract class Var {
 abstract class GlobalVar extends Var {
   def constVal: Option[ConstVal]
 
-//  lazy val label: Option[String] = if datatype.runtime then constVal match {
-//    case Some(value) => Some(AsmGen.data(value))
-//    case None => Some(AsmGen.bss(datatype.size, datatype.align))
-//  } else None
-
+  def generateIr(globalVars: Map[GlobalVar, Int]): opt.Var
+  
+  def runtime: Boolean
+  
   lazy val label: Option[String] = if datatype.runtime then Some(AsmGen.bss(datatype.size.roundUp(8), datatype.align)) else None
 }
 
@@ -32,12 +31,20 @@ class BuiltinGlobalVar(module: => Module, val name: String, value: ConstVal) ext
   lazy val datatype: Datatype = value.datatype
   lazy val constVal: Option[ConstVal] = Some(value)
 
+  override def generateIr(globalVars: Map[GlobalVar, Int]): opt.Var = ???
+  
+  lazy val runtime: Boolean = value.datatype.runtime
+
   def format(indentation: Int): String = s"${" " * indentation}builtin $name: $datatype = $value"
 }
 
 class UserGlobalVar(module: => Module, val name: String, init: => UserGlobalVarInit, patternNav: PatternNav, typeExpr: Option[syn.Expr], val range: FilePosRange) extends GlobalVar {
   lazy val datatype: Datatype = typeExpr.map(typeExpr => analyzeExpr(ExprParsingContext(module, None))(typeExpr).constDatatype).getOrElse(patternNav.datatype(init.analyzedExpr.returnType).withMut(false))
   lazy val constVal: Option[ConstVal] = if datatype.mutable then None else init.analyzedExpr.constVal.map(patternNav.const)
+
+  override def generateIr(globalVars: Map[GlobalVar, Int]): opt.Var = ???
+
+  lazy val runtime: Boolean = datatype.runtime && init.analyzedExpr.runtime
 }
 
 class UserGlobalVarInit(module: => Module, expr: syn.Expr, pattern: => Pattern[UserGlobalVar]) {
@@ -65,6 +72,10 @@ abstract class Fun {
   def generateCode(): List[Instr]
 
   def generateInlineCode(ctx: ExprCodeGenContext): Boolean
+  
+  def generateIr(globalVars: Map[GlobalVar, Int], funs: mutable.Map[Fun, Int]): opt.Fun
+  
+  def runtime: Boolean
 
   lazy val signature: FunDatatype = FunDatatype(argTypes.map(_.withMut(false)), returnType.withMut(false), false)
 
@@ -80,7 +91,7 @@ abstract class Fun {
   }
 }
 
-class BuiltinFun(val module: Module, val argTypes: List[Datatype], val returnType: Datatype, eval: List[ConstVal] => Option[ConstVal], generate: () => List[Instr], inlineGenerate: ExprCodeGenContext => Boolean = _ => false) extends Fun {
+class BuiltinFun(val module: Module, val argTypes: List[Datatype], val returnType: Datatype, eval: List[ConstVal] => Option[ConstVal], generate: () => List[Instr], graph: => Option[opt.Fun], inlineGenerate: ExprCodeGenContext => Boolean = _ => false) extends Fun {
   override def range: FilePosRange = module.file.lastRange
 
   override def format(indentation: Int): String = s"builtin fun(${argTypes.mkString(", ")}): $returnType"
@@ -90,6 +101,10 @@ class BuiltinFun(val module: Module, val argTypes: List[Datatype], val returnTyp
   override def generateCode(): List[Instr] = generate()
 
   override def generateInlineCode(ctx: ExprCodeGenContext): Boolean = inlineGenerate(ctx)
+
+  override def generateIr(globalVars: Map[GlobalVar, Int], funs: mutable.Map[Fun, Int]): opt.Fun = graph.get
+
+  lazy val runtime: Boolean = signature.runtime && graph.nonEmpty
 }
 
 class UserFun(val module: Module, parameters: List[syn.Pattern], retTypeExpr: Option[syn.Expr], expr: syn.Expr, val range: FilePosRange) extends Fun {
@@ -143,6 +158,10 @@ class UserFun(val module: Module, parameters: List[syn.Pattern], retTypeExpr: Op
   }
 
   override def generateInlineCode(ctx: ExprCodeGenContext): Boolean = false
+
+  override def generateIr(globalVars: Map[GlobalVar, Int], funs: mutable.Map[Fun, Int]): opt.Fun = ???
+
+  lazy val runtime: Boolean = signature.runtime && analyzedExpr.runtime
 }
 
 class Module(val file: File, fileContent: => (Map[String, List[GlobalVar]], List[UserGlobalVarInit])) {
@@ -157,5 +176,12 @@ class Module(val file: File, fileContent: => (Map[String, List[GlobalVar]], List
     val formattedBuiltin = section(vars.filter(_._2.isInstanceOf[BuiltinGlobalVar]).map(v => s"${v._2.asInstanceOf[BuiltinGlobalVar].format(indentation + 1)}\n").mkString)
     val formattedVars = section(varInits.map(v => s"${v.format(indentation + 1)}\n\n").mkString)
     s"${" " * indentation}module ${file.name} {\n$formattedBuiltin$formattedVars}"
+  }
+
+  def generateIr(): opt.OptUnit = {
+    var funs = mutable.Map[Fun, Int]()
+    val globalVars = vars.values.flatten
+    val varNodes = globalVars.map(_.generateIr(globalVars))
+    vars("main").head.constVal.get.asInstanceOf[ConstFunction].function.generateIr(globalVars.zipWithIndex.toMap, funs)
   }
 }

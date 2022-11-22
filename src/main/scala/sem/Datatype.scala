@@ -19,11 +19,11 @@ abstract class Datatype {
       (size, align)
   }
 
-  lazy val (runtime: Boolean, compiletime: Boolean) = this match {
-    case UnitDatatype(_) | IntDatatype(_) | BoolDatatype(_) | RefDatatype(_, _) => (true, true)
-    case TypeDatatype(_) => (false, true)
-    case TupleDatatype(elements, _) => (elements.forall(_.runtime), elements.forall(_.compiletime))
-    case FunDatatype(params, returnType, _) => (returnType.runtime && params.forall(_.runtime), returnType.compiletime && params.forall(_.compiletime))
+  lazy val runtime: Boolean = this match {
+    case UnitDatatype(_) | IntDatatype(_) | BoolDatatype(_) | RefDatatype(_, _) => true
+    case TypeDatatype(_) => false
+    case TupleDatatype(elements, _) => elements.forall(_.runtime)
+    case FunDatatype(params, returnType, _) => returnType.runtime && params.forall(_.runtime)
   }
 
   @targetName("implicitCast")

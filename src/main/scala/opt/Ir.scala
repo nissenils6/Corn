@@ -116,17 +116,31 @@ case class RefLocal(local: Int, next: Controlflow) extends Op
 case class ReadGlobal(global: Var, next: Controlflow) extends Op
 case class WriteGlobal(global: Var, data: Dataflow, next: Controlflow) extends Op
 case class RefGlobal(global: Var, next: Controlflow) extends Op
-case class Call(fn: Fn, values: List[Dataflow], next: Controlflow) extends Op
+case class Call(fn: Fun, values: List[Dataflow], next: Controlflow) extends Op
 case class CallInd(fn: Dataflow, values: List[Dataflow], next: Controlflow) extends Op
 case class Ret(returnValues: List[Dataflow]) extends Op
 
-case class Fn(entry: Controlflow, signature: FunDatatype, localVars: List[Datatype]) {
-  def format(): String = s"digraph {\n${entry.op.format(mutable.Set()).map(" " * 8 + _ + "\n").mkString}}"
+abstract class Fun {
+
+}
+
+case class CodeFun(entry: Controlflow, signature: FunDatatype, localVars: List[Datatype]) extends Fun {
+  def format(): String = s"digraph {${entry.op.format(mutable.Set()).map(" " * 8 + _).mkString("\n", "\n", "\n")}}"
+}
+
+case class AsmFun() extends Fun {
+
+}
+
+case class WindowsFun(name: String) extends Fun {
+
 }
 
 case class Var(entry: Controlflow, datatypes: List[Datatype])
 
-def fn: Fn = {
+case class OptUnit(fns: List[CodeFun], vars: List[Var])
+
+def fn: Fun = {
   lazy val int1: IntLit = IntLit(3, int2ctrl)
   lazy val int2: IntLit = IntLit(5, addctrl)
   lazy val add: AddInt = AddInt(List(int1data, int2data), List(), int3ctrl)
@@ -147,5 +161,5 @@ def fn: Fn = {
   lazy val int3data: Dataflow = Dataflow(() => Some(int3))
   lazy val multdata: Dataflow = Dataflow(() => Some(mult))
 
-  Fn(int1ctrl, FunDatatype(List(), List()), List())
+  CodeFun(int1ctrl, FunDatatype(List(), List()), List())
 }
