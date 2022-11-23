@@ -104,7 +104,7 @@ private def parseSep[T](state: ParserState, element: ParserState => (T, ParserSt
     (expr :: exprs, rest, endRange)
   } else if (state.tokens.head.isSymbol(end)) {
     val endRange = state.tokens.head.range
-    (List(), state.withTokensTail, endRange)
+    (List.empty, state.withTokensTail, endRange)
   } else {
     throw Error.unexpected(state.tokens.head, s"'$end' or '$sep'")
   }
@@ -113,7 +113,7 @@ private def parseSep[T](state: ParserState, element: ParserState => (T, ParserSt
     throw Error.unexpected(s"'$end' or $desc", state.file)
   } else if (state.tokens.head.isSymbol(end)) {
     val endRange = state.tokens.head.range
-    (List(), state.withTokensTail, endRange)
+    (List.empty, state.withTokensTail, endRange)
   } else {
     val (expr, newState) = element(state)
     val (exprs, rest, endRange) = rec(newState)
@@ -241,4 +241,4 @@ private def parseGlobalStmts(stmts: List[GlobalStmt], state: ParserState): (List
   case _ => (stmts, state)
 }
 
-def parseFile(tokens: List[Token], file: File): List[GlobalStmt] = parseGlobalStmts(List(), ParserState(tokens, file))._1.reverse
+def parseFile(tokens: List[Token], file: File): List[GlobalStmt] = parseGlobalStmts(List.empty, ParserState(tokens, file))._1.reverse

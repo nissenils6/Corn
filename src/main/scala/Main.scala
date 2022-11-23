@@ -33,7 +33,12 @@ def time[T](name: String, expr: => T): T = {
 //    write(AsmGen.toString)
 //    close()
 //  }
-  
+
+  val optUnit = module.generateIr()
+
+  optUnit.fns.foreach {
+    case fun: opt.CodeFun => println(fun.format())
+  }
 
   println()
   println(List(tokens.mkString(" "), parsedFile.mkString("\n\n"), module.format(0)).mkString("-" * 128 + "\n\n", "\n\n" + "-" * 128 + "\n\n", "\n\n" + "-" * 128))

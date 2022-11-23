@@ -18,10 +18,10 @@ abstract class Var {
 abstract class GlobalVar extends Var {
   def constVal: Option[ConstVal]
 
-  def generateIr(globalVars: Map[GlobalVar, Int]): opt.Var
-  
   def runtime: Boolean
-  
+
+  def compiletime: Boolean
+
   lazy val label: Option[String] = if datatype.runtime then Some(AsmGen.bss(datatype.size.roundUp(8), datatype.align)) else None
 }
 
@@ -31,9 +31,9 @@ class BuiltinGlobalVar(module: => Module, val name: String, value: ConstVal) ext
   lazy val datatype: Datatype = value.datatype
   lazy val constVal: Option[ConstVal] = Some(value)
 
-  override def generateIr(globalVars: Map[GlobalVar, Int]): opt.Var = ???
-  
   lazy val runtime: Boolean = value.datatype.runtime
+
+  lazy val compiletime: Boolean = true
 
   def format(indentation: Int): String = s"${" " * indentation}builtin $name: $datatype = $value"
 }
@@ -42,14 +42,30 @@ class UserGlobalVar(module: => Module, val name: String, init: => UserGlobalVarI
   lazy val datatype: Datatype = typeExpr.map(typeExpr => analyzeExpr(ExprParsingContext(module, None))(typeExpr).constDatatype).getOrElse(patternNav.datatype(init.analyzedExpr.returnType).withMut(false))
   lazy val constVal: Option[ConstVal] = if datatype.mutable then None else init.analyzedExpr.constVal.map(patternNav.const)
 
-  override def generateIr(globalVars: Map[GlobalVar, Int]): opt.Var = ???
-
   lazy val runtime: Boolean = datatype.runtime && init.analyzedExpr.runtime
+
+  lazy val compiletime: Boolean = init.analyzedExpr.compiletime
+
+  def initt = init
 }
 
 class UserGlobalVarInit(module: => Module, expr: syn.Expr, pattern: => Pattern[UserGlobalVar]) {
   lazy val analyzedExpr: Expr = analyzeExpr(ExprParsingContext(module, None))(expr)
   lazy val analyzedPattern: Pattern[UserGlobalVar] = pattern
+
+  def generateIr(globalVars: Map[GlobalVar, Int], funs: Map[Fun, Int]): opt.Var = {
+    lazy val (exprData: opt.Dataflow, exprCtrl: opt.Controlflow) = analyzedExpr.generateIr(opt.Controlflow(() => patternCtrl.op), globalVars, funs, Map.empty, Counter())
+    lazy val (patternCtrl: opt.Controlflow, data: List[(opt.Datatype, opt.Dataflow)]) = Pattern.generateIrGlobal(analyzedPattern, exprData, retCtrl, globalVars)
+    lazy val retOp = opt.Ret(data.map(_._2))
+    lazy val retCtrl = opt.Controlflow(() => retOp)
+    opt.Var(exprCtrl, data.map(_._1).toArray)
+  }
+
+  def gatherFuns: List[Fun] = analyzedExpr.gatherFuns
+
+  lazy val runtime: Boolean = pattern.datatype.runtime && analyzedExpr.runtime
+
+  lazy val compiletime: Boolean = analyzedExpr.compiletime
 
   def typeCheck(): Unit = {
     if (analyzedExpr.returnType !~=> analyzedPattern.datatype) throw Error.typeMismatch(analyzedExpr.returnType, analyzedPattern.datatype, analyzedExpr.range, analyzedPattern.range)
@@ -72,10 +88,14 @@ abstract class Fun {
   def generateCode(): List[Instr]
 
   def generateInlineCode(ctx: ExprCodeGenContext): Boolean
-  
-  def generateIr(globalVars: Map[GlobalVar, Int], funs: mutable.Map[Fun, Int]): opt.Fun
-  
+
+  def generateIr(globalVars: Map[GlobalVar, Int], funs: Map[Fun, Int]): opt.Fun
+
   def runtime: Boolean
+
+  def compiletime: Boolean
+
+  def gatherFuns: List[Fun]
 
   lazy val signature: FunDatatype = FunDatatype(argTypes.map(_.withMut(false)), returnType.withMut(false), false)
 
@@ -91,25 +111,29 @@ abstract class Fun {
   }
 }
 
-class BuiltinFun(val module: Module, val argTypes: List[Datatype], val returnType: Datatype, eval: List[ConstVal] => Option[ConstVal], generate: () => List[Instr], graph: => Option[opt.Fun], inlineGenerate: ExprCodeGenContext => Boolean = _ => false) extends Fun {
+class BuiltinFun(val module: Module, val argTypes: List[Datatype], val returnType: Datatype, eval: Option[List[ConstVal] => ConstVal], generate: () => List[Instr], graph: => Option[opt.Fun], inlineGenerate: ExprCodeGenContext => Boolean = _ => false) extends Fun {
   override def range: FilePosRange = module.file.lastRange
 
   override def format(indentation: Int): String = s"builtin fun(${argTypes.mkString(", ")}): $returnType"
 
-  override def constEval(args: List[ConstVal]): Option[ConstVal] = eval(args)
+  override def constEval(args: List[ConstVal]): Option[ConstVal] = eval.map(_(args))
 
   override def generateCode(): List[Instr] = generate()
 
   override def generateInlineCode(ctx: ExprCodeGenContext): Boolean = inlineGenerate(ctx)
 
-  override def generateIr(globalVars: Map[GlobalVar, Int], funs: mutable.Map[Fun, Int]): opt.Fun = graph.get
+  override def generateIr(globalVars: Map[GlobalVar, Int], funs: Map[Fun, Int]): opt.Fun = graph.get
 
   lazy val runtime: Boolean = signature.runtime && graph.nonEmpty
+
+  lazy val compiletime: Boolean = eval.nonEmpty
+
+  override def gatherFuns: List[Fun] = List.empty
 }
 
 class UserFun(val module: Module, parameters: List[syn.Pattern], retTypeExpr: Option[syn.Expr], expr: syn.Expr, val range: FilePosRange) extends Fun {
   lazy val (args: List[Pattern[LocalVar]], params: Map[String, LocalVar]) = {
-    val (args, params) = parameters.map(parameter => Pattern.map((pattern, patternNav) => new LocalVar(module, pattern.name, None, patternNav, pattern.datatype, pattern.range), parameter)).unzip
+    val (args, params) = parameters.map(parameter => Pattern.analyze((pattern, patternNav) => new LocalVar(module, pattern.name, None, patternNav, pattern.datatype, pattern.range), parameter)).unzip
     (args, Pattern.verify(params.flatten))
   }
 
@@ -159,9 +183,19 @@ class UserFun(val module: Module, parameters: List[syn.Pattern], retTypeExpr: Op
 
   override def generateInlineCode(ctx: ExprCodeGenContext): Boolean = false
 
-  override def generateIr(globalVars: Map[GlobalVar, Int], funs: mutable.Map[Fun, Int]): opt.Fun = ???
+  override def generateIr(globalVars: Map[GlobalVar, Int], funs: Map[Fun, Int]): opt.Fun = {
+    val counter = Counter()
+    lazy val (exprData: opt.Dataflow, exprCtrl: opt.Controlflow) = analyzedExpr.generateIr(retCtrl, globalVars, funs, Map.empty, counter)
+    lazy val retOp = opt.Ret(List(exprData))
+    lazy val retCtrl = opt.Controlflow(() => retOp)
+    opt.CodeFun(exprCtrl, signature.optDatatype.asInstanceOf[opt.FunDatatype], counter.localVars)
+  }
 
   lazy val runtime: Boolean = signature.runtime && analyzedExpr.runtime
+
+  lazy val compiletime: Boolean = analyzedExpr.compiletime
+
+  override def gatherFuns: List[Fun] = this :: analyzedExpr.gatherFuns
 }
 
 class Module(val file: File, fileContent: => (Map[String, List[GlobalVar]], List[UserGlobalVarInit])) {
@@ -179,9 +213,15 @@ class Module(val file: File, fileContent: => (Map[String, List[GlobalVar]], List
   }
 
   def generateIr(): opt.OptUnit = {
-    var funs = mutable.Map[Fun, Int]()
     val globalVars = vars.values.flatten
-    val varNodes = globalVars.map(_.generateIr(globalVars))
-    vars("main").head.constVal.get.asInstanceOf[ConstFunction].function.generateIr(globalVars.zipWithIndex.toMap, funs)
+    val funs = varInits.flatMap(_.gatherFuns)
+
+    val globalVarsMap = globalVars.zipWithIndex.toMap
+    val funsMap = funs.zipWithIndex.toMap
+
+    val varNodes = varInits.map(_.generateIr(globalVarsMap, funsMap))
+    val funNodes = funs.map(_.generateIr(globalVarsMap, funsMap))
+//    vars("main").head.asInstanceOf[UserGlobalVar].initt.generateIr(globalVars, funs)
+    opt.OptUnit(funNodes.toArray, varNodes.toArray)
   }
 }

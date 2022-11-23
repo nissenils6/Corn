@@ -38,7 +38,7 @@ case object VarPatternNav extends PatternNav
 case class TuplePatternNav(index: Int, next: PatternNav) extends PatternNav
 
 object Pattern {
-  def map[T <: Var](varConstructor: (syn.VarPattern, PatternNav) => T, pattern: syn.Pattern): (Pattern[T], List[T]) = {
+  def analyze[T <: Var](varConstructor: (syn.VarPattern, PatternNav) => T, pattern: syn.Pattern): (Pattern[T], List[T]) = {
     def rec(pattern: syn.Pattern, patternNav: PatternNav): (Pattern[T], List[T]) = pattern match {
       case varPattern: syn.VarPattern =>
         val variable = varConstructor(varPattern, patternNav)
@@ -59,21 +59,39 @@ object Pattern {
     if (errors.nonEmpty) throw ErrorGroup(errors.toList)
     verifiedVars.toMap
   }
-
-  def generateIr(pattern: Pattern[LocalVar], expr: opt.Dataflow, nextCtrl: opt.Controlflow, localVars: Map[LocalVar, Int]): opt.Controlflow = pattern match {
+  
+  private def generateIr[V <: Var](pattern: Pattern[V], expr: opt.Dataflow, nextCtrl: opt.Controlflow, makeWriteOp: (V, opt.Dataflow, opt.Controlflow) => opt.Op): opt.Controlflow = pattern match {
     case VarPattern(patternVar, _) =>
-      lazy val writeOp: opt.WriteLocal = opt.WriteLocal(localVars(patternVar), expr, nextCtrl)
+      lazy val writeOp: opt.Op = makeWriteOp(patternVar, expr, nextCtrl)
       lazy val writeCtrl: opt.Controlflow = opt.Controlflow(() => writeOp)
       writeCtrl
     case TuplePattern(elements, _) =>
-      lazy val tupleCtrl = elements.zipWithIndex.foldRight(nextCtrl)((tuple, ctrl) => {
+      elements.zipWithIndex.foldRight(nextCtrl)((tuple, ctrl) => {
         val (subPattern, index) = tuple
         lazy val idxOp: opt.TupleIdx = opt.TupleIdx(expr, index, patternCtrl)
-        lazy val patternCtrl: opt.Controlflow = generateIr(subPattern, idxData, ctrl, localVars)
+        lazy val patternCtrl: opt.Controlflow = generateIr(subPattern, idxData, ctrl, makeWriteOp)
         lazy val idxCtrl: opt.Controlflow = opt.Controlflow(() => idxOp)
         lazy val idxData: opt.Dataflow = opt.Dataflow(() => Some(idxOp))
         idxCtrl
       })
-      tupleCtrl
+  }
+
+  def generateIrLocal(pattern: Pattern[LocalVar], expr: opt.Dataflow, nextCtrl: opt.Controlflow, localVars: Map[LocalVar, Int]): opt.Controlflow = generateIr(pattern, expr, nextCtrl, (patternVar, expr, nextCtrl) => opt.WriteLocal(localVars(patternVar), expr, nextCtrl))
+  
+  // def generateIrGlobal(pattern: Pattern[UserGlobalVar], expr: opt.Dataflow, nextCtrl: opt.Controlflow, globalVars: Map[GlobalVar, Int]): opt.Controlflow = generateIr(pattern, expr, nextCtrl, (patternVar, expr, nextCtrl) => opt.WriteGlobal(globalVars(patternVar), expr, nextCtrl))
+  
+  def generateIrGlobal(pattern: Pattern[UserGlobalVar], expr: opt.Dataflow, nextCtrl: opt.Controlflow, globalVars: Map[GlobalVar, Int]): (opt.Controlflow, List[(opt.Datatype, opt.Dataflow)]) = pattern match {
+    case VarPattern(patternVar, _) =>
+      (nextCtrl, List((patternVar.datatype.optDatatype, expr)))
+    case TuplePattern(elements, _) =>
+      elements.zipWithIndex.foldRight((nextCtrl, List[(opt.Datatype, opt.Dataflow)]()))((element, previous) => {
+        val (subPattern, index) = element
+        val (ctrl, prevData) = previous
+        lazy val idxOp: opt.TupleIdx = opt.TupleIdx(expr, index, patternCtrl)
+        lazy val (patternCtrl: opt.Controlflow, data: List[(opt.Datatype, opt.Dataflow)]) = generateIrGlobal(subPattern, idxData, ctrl, globalVars)
+        lazy val idxCtrl: opt.Controlflow = opt.Controlflow(() => idxOp)
+        lazy val idxData: opt.Dataflow = opt.Dataflow(() => Some(idxOp))
+        (idxCtrl, data ::: prevData)
+      })
   }
 }

@@ -143,8 +143,8 @@ def tokenize(file: File): List[Token] = {
     case (BlankState, (IdenStartChar(char), Range(start)) :: rest) => lex(IdenState(false, List(char), start), rest, tokens, errors)
     case (BlankState, (IdenSymChar(char), Range(start)) :: rest) => lex(IdenState(true, List(char), start), rest, tokens, errors)
     case (BlankState, (NumberStartChar(char), Range(start)) :: rest) => lex(NumberState(List(char), start), rest, tokens, errors)
-    case (BlankState, ('"', Range(start)) :: rest) => lex(StringState(false, List(), start), rest, tokens, errors)
-    case (BlankState, ('\'', Range(start)) :: rest) => lex(StringState(true, List(), start), rest, tokens, errors)
+    case (BlankState, ('"', Range(start)) :: rest) => lex(StringState(false, List.empty, start), rest, tokens, errors)
+    case (BlankState, ('\'', Range(start)) :: rest) => lex(StringState(true, List.empty, start), rest, tokens, errors)
     case (BlankState, (char, Range(charRange)) :: rest) => lex(BlankState, rest, tokens, ErrorComponent(charRange, Some(s"Disallowed character '$char'")) :: errors)
 
     case (IdenState(false, iden, range), (IdenChar(char), Range(charRange)) :: rest) => lex(IdenState(false, char :: iden, range | charRange), rest, tokens, errors)
@@ -171,7 +171,7 @@ def tokenize(file: File): List[Token] = {
     case (StringState(isChar, _, range), List()) => (tokens, ErrorComponent(range.after, Some(s"Unexpected end of file while parsing ${if isChar then "character" else "string"} literal")) :: errors)
   }
 
-  val (tokens, errors) = lex(BlankState, file.source.toList.zipWithIndex, List(), List())
+  val (tokens, errors) = lex(BlankState, file.source.toList.zipWithIndex, List.empty, List.empty)
   if (errors.nonEmpty) throw Error(Error.LEXICAL, file, errors.reverse)
   tokens.reverse
 }

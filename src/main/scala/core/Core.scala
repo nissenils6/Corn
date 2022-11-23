@@ -2,7 +2,7 @@ package core
 
 import lex.Token
 import syn.Expr
-import sem.Datatype
+import sem.{Datatype, LocalVar}
 
 import scala.annotation.{tailrec, targetName, unused}
 import scala.collection.mutable
@@ -58,7 +58,7 @@ object Error {
     Error(SEMANTIC, range.file, List(ErrorComponent(range, Some(s"Expected compile-time expression evaluating to value of type 'Type'"))))
 
   def todo(file: File): Error =
-    Error(INTERNAL, file, List())
+    Error(INTERNAL, file, List.empty)
 
   def todo(range: FilePosRange): Error =
     Error(INTERNAL, range.file, List(ErrorComponent(range)))
@@ -126,8 +126,10 @@ case class FilePosRange(start: Int, end: Int, file: File) {
 }
 
 class Counter(var count: Int = 0) {
-  def next: Int = {
+  var localVars = List[opt.Datatype]()
+  def next(localVar: LocalVar): Int = {
     val number = count
+    localVars = localVar.datatype.optDatatype :: localVars
     count += 1
     number
   }

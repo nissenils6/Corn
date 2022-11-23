@@ -14,7 +14,7 @@ case class State[S, A](run: S => TailRec[(A, S)]) {
 }
 
 def repeat[S, A](state: State[S, A], count: Int): State[S, List[A]] = count match {
-  case 0 => State(s => done(List(), s))
+  case 0 => State(s => done(List.empty, s))
   case _ => for {
     a <- state
     as <- repeat(state, count - 1)

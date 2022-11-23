@@ -26,6 +26,16 @@ abstract class Datatype {
     case FunDatatype(params, returnType, _) => returnType.runtime && params.forall(_.runtime)
   }
 
+  lazy val optDatatype: opt.Datatype = this match {
+    case UnitDatatype(_) => opt.UnitDatatype
+    case IntDatatype(_) => opt.IntDatatype
+    case BoolDatatype(_) => opt.BoolDatatype
+    case TypeDatatype(_) => ???
+    case RefDatatype(_, _) => ???
+    case TupleDatatype(elements, _) => opt.TupleDatatype(elements.map(_.optDatatype))
+    case FunDatatype(params, returnType, _) => opt.FunDatatype(params.map(_.optDatatype), List(returnType.optDatatype))
+  }
+
   @targetName("implicitCast")
   def ~=>(datatype: Datatype): Boolean = (this, datatype) match {
     case (RefDatatype(datatype1, _), RefDatatype(datatype2, _)) => (datatype1 ~=> datatype2) && (!datatype2.mutable || datatype1.mutable)
@@ -147,7 +157,7 @@ abstract class ConstVal {
       Lea(Reg.RAX, Address(function.label)),
       Store(address, Reg.RAX)
     )
-    case ConstUnit | ConstType(_) => List()
+    case ConstUnit | ConstType(_) => List.empty
   }
 
   override def toString: String = this match {

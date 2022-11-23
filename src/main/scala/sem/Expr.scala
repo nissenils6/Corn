@@ -8,6 +8,7 @@ import syn.AssignExpr
 import scala.annotation.tailrec
 import scala.collection.immutable.List
 import scala.collection.mutable
+import scala.compiletime.ops.int
 
 abstract class Expr() {
   def module: Module
@@ -34,6 +35,18 @@ abstract class Expr() {
     case MutExpr(_, _, _, _) => TypeDatatype(false)
   }
 
+  def gatherFuns: List[Fun] = this match {
+    case CallExpr(function, args, _, _) => function.gatherFuns ::: args.flatMap(_.gatherFuns)
+    case ValExpr(expr, _, _) => expr.gatherFuns
+    case TupleExpr(elements, _, _) => elements.flatMap(_.gatherFuns)
+    case BlockExpr(exprs, lastExpr, _, _, _) => lastExpr.gatherFuns ::: exprs.flatMap(_.gatherFuns)
+    case LetExpr(_, expr, _, _) => expr.gatherFuns
+    case AssignExpr(left, right, _, _) => left.gatherFuns ::: right.gatherFuns
+    case FunExpr(fun, _, _) => fun.gatherFuns
+    case IfExpr(condition, ifBlock, elseBlock, _, _) => condition.gatherFuns ::: ifBlock.gatherFuns ::: elseBlock.gatherFuns
+    case _ => List.empty
+  }
+
   lazy val runtime: Boolean = this match {
     case CallExpr(function, args, _, _) => function.runtime && args.forall(_.runtime)
     case GlobalVarExpr(globalVar, _, _) => globalVar.runtime
@@ -41,18 +54,31 @@ abstract class Expr() {
     case LocalVarExpr(localVar, _, _) => localVar.runtime
     case RefLocalVarExpr(localVar, _, _) => localVar.runtime
     case ValExpr(expr, _, _) => expr.runtime
-    case IntExpr(_, _, _) => true
-    case BoolExpr(_, _, _) => true
+    case IntExpr(_, _, _) | BoolExpr(_, _, _) | UnitExpr(_, _) => true
     case TupleExpr(elements, _, _) => elements.forall(_.runtime)
     case BlockExpr(exprs, lastExpr, _, _, _) => lastExpr.runtime && exprs.forall(_.runtime)
-    case UnitExpr(_, _) => true
     case LetExpr(_, expr, _, _) => expr.runtime
     case AssignExpr(_, expr, _, _) => expr.runtime
     case FunExpr(fun, _, _) => fun.runtime
-    case FunTypeExpr(_, _, _, _) => false
-    case RefTypeExpr(_, _, _) => false
+    case FunTypeExpr(_, _, _, _) | RefTypeExpr(_, _, _) | MutExpr(_, _, _, _) => false
     case IfExpr(condition, ifBlock, elseBlock, _, _) => condition.runtime && ifBlock.runtime && elseBlock.runtime
-    case MutExpr(_, _, _, _) => false
+  }
+
+  lazy val compiletime: Boolean = this match {
+    case CallExpr(function, args, _, _) => function.compiletime && args.forall(_.compiletime)
+    case GlobalVarExpr(globalVar, _, _) => globalVar.compiletime
+    case RefGlobalVarExpr(globalVar, _, _) => globalVar.compiletime
+    case LocalVarExpr(localVar, _, _) => localVar.compiletime
+    case RefLocalVarExpr(localVar, _, _) => localVar.compiletime
+    case ValExpr(expr, _, _) => expr.compiletime
+    case IntExpr(_, _, _) | BoolExpr(_, _, _) | UnitExpr(_, _) => true
+    case TupleExpr(elements, _, _) => elements.forall(_.compiletime)
+    case BlockExpr(exprs, lastExpr, _, _, _) => lastExpr.compiletime && exprs.forall(_.compiletime)
+    case LetExpr(_, expr, _, _) => expr.compiletime
+    case AssignExpr(_, expr, _, _) => expr.compiletime
+    case FunExpr(fun, _, _) => fun.compiletime
+    case FunTypeExpr(_, _, _, _) | RefTypeExpr(_, _, _) | MutExpr(_, _, _, _) => false
+    case IfExpr(condition, ifBlock, elseBlock, _, _) => condition.compiletime && ifBlock.compiletime && elseBlock.compiletime
   }
 
   lazy val constVal: Option[ConstVal] = this match {
@@ -304,12 +330,12 @@ abstract class Expr() {
     case MutExpr(_, _, _, range) => Error.todo("", range)
   }
 
-  def generateIr(nextCtrl: opt.Controlflow, localVars: Map[LocalVar, Int], counter: Counter): (opt.Dataflow, opt.Controlflow) = this match {
+  def generateIr(nextCtrl: opt.Controlflow, globalVars: Map[GlobalVar, Int], funs: Map[Fun, Int], localVars: Map[LocalVar, Int], counter: Counter): (opt.Dataflow, opt.Controlflow) = this match {
     case CallExpr(function, args, _, _) =>
-      lazy val (fnExprData: opt.Dataflow, fnExprCtrl: opt.Controlflow) = function.generateIr(argsCtrl, localVars, counter)
+      lazy val (fnExprData: opt.Dataflow, fnExprCtrl: opt.Controlflow) = function.generateIr(argsCtrl, globalVars, funs, localVars, counter)
       lazy val (argsCtrl: opt.Controlflow, argsData: List[opt.Dataflow]) = args.foldRight((callCtrl, List[opt.Dataflow]()))((arg, tuple) => {
         val (ctrl, argsData) = tuple
-        lazy val (argData: opt.Dataflow, argCtrl: opt.Controlflow) = arg.generateIr(ctrl, localVars, counter)
+        lazy val (argData: opt.Dataflow, argCtrl: opt.Controlflow) = arg.generateIr(ctrl, globalVars, funs, localVars, counter)
         (argCtrl, argData :: argsData)
       })
       lazy val callOp: opt.Op = opt.CallInd(fnExprData, argsData, nextCtrl)
@@ -317,7 +343,11 @@ abstract class Expr() {
       lazy val callData: opt.Dataflow = opt.Dataflow(() => Some(callOp))
       lazy val callCtrl: opt.Controlflow = opt.Controlflow(() => callOp)
       (callData, fnExprCtrl)
-    case GlobalVarExpr(globalVar, _, _) => ???
+    case GlobalVarExpr(globalVar, _, _) =>
+      lazy val intOp: opt.Op = opt.ReadGlobal(globalVars(globalVar), 0, nextCtrl) // todo FIX ZERO
+      lazy val intData: opt.Dataflow = opt.Dataflow(() => Some(intOp))
+      lazy val intCtrl: opt.Controlflow = opt.Controlflow(() => intOp)
+      (intData, intCtrl)
     case RefGlobalVarExpr(globalVar, _, _) => ???
     case LocalVarExpr(localVar, _, _) => ???
     case RefLocalVarExpr(localVar, _, _) => ???
@@ -334,24 +364,28 @@ abstract class Expr() {
       (boolData, boolCtrl)
     case TupleExpr(elements, _, _) => ???
     case BlockExpr(exprs, lastExpr, vars, _, _) =>
-      val newLocalVars = if vars.nonEmpty then localVars.concat(vars.map(localVar => (localVar, counter.next))) else localVars
+      val newLocalVars = if vars.nonEmpty then localVars.concat(vars.map(localVar => (localVar, counter.next(localVar))).toMap) else localVars
       lazy val exprsCtrl: opt.Controlflow = exprs.foldRight(lastExprCtrl)((expr, ctrl) => {
-        expr.generateIr(ctrl, newLocalVars, counter)._2
+        expr.generateIr(ctrl, globalVars, funs, newLocalVars, counter)._2
       })
 
-      lazy val (lastExprData: opt.Dataflow, lastExprCtrl: opt.Controlflow) = lastExpr.generateIr(nextCtrl, newLocalVars, counter)
+      lazy val (lastExprData: opt.Dataflow, lastExprCtrl: opt.Controlflow) = lastExpr.generateIr(nextCtrl, globalVars, funs, newLocalVars, counter)
       (lastExprData, exprsCtrl)
     case UnitExpr(_, _) =>
       lazy val unitOp: opt.Op = opt.UnitLit(nextCtrl)
       lazy val unitData: opt.Dataflow = opt.Dataflow(() => Some(unitOp))
       lazy val unitCtrl: opt.Controlflow = opt.Controlflow(() => unitOp)
       (unitData, unitCtrl)
-    case LetExpr(pattern, expr, _, _) => 
-      lazy val (exprData: opt.Dataflow, exprCtrl: opt.Controlflow) = expr.generateIr(patternCtrl, localVars, counter)
-      lazy val patternCtrl: opt.Controlflow = Pattern.generateIr(pattern, exprData, nextCtrl, localVars)
+    case LetExpr(pattern, expr, _, _) =>
+      lazy val (exprData: opt.Dataflow, exprCtrl: opt.Controlflow) = expr.generateIr(patternCtrl, globalVars, funs, localVars, counter)
+      lazy val patternCtrl: opt.Controlflow = Pattern.generateIrLocal(pattern, exprData, nextCtrl, localVars)
       (exprData, exprCtrl)
     case AssignExpr(left, right, _, _) => ???
-    case FunExpr(fun, _, _) => ???
+    case FunExpr(fun, _, _) =>
+      lazy val funOp: opt.Op = opt.FunLit(funs(fun), nextCtrl)
+      lazy val funData: opt.Dataflow = opt.Dataflow(() => Some(funOp))
+      lazy val funCtrl: opt.Controlflow = opt.Controlflow(() => funOp)
+      (funData, funCtrl)
     case FunTypeExpr(parameters, returnType, _, _) => ???
     case RefTypeExpr(expr, _, _) => ???
     case IfExpr(condition, ifBlock, elseBlock, _, _) => ???
@@ -424,6 +458,8 @@ class LocalVar(val module: Module, val name: String, letExpr: => Option[LetExpr]
   lazy val constVal: Option[ConstVal] = if datatype.mutable then None else letExpr.flatMap(_.constVal.map(patternNav.const))
 
   lazy val runtime: Boolean = datatype.runtime && letExpr.forall(_.runtime)
+
+  lazy val compiletime: Boolean = letExpr.exists(_.compiletime)
 }
 
 def overload(vars: List[Var], funRange: FilePosRange, args: List[Expr]): Option[(Var, List[Expr])] = {
@@ -594,7 +630,7 @@ def analyzeExpr(ctx: ExprParsingContext)(expr: syn.Expr): Expr = expr match {
   case syn.UnitExpr(range) => UnitExpr(ctx.module, range)
   case syn.LetExpr(pattern, expr, range) =>
     lazy val analyzedExpr = analyzeExpr(ctx)(expr)
-    lazy val (analyzedPattern: Pattern[LocalVar], vars: List[LocalVar]) = Pattern.map((pattern, patternNav) => new LocalVar(ctx.module, pattern.name, Some(letExpr), patternNav, pattern.datatype, pattern.range), pattern)
+    lazy val (analyzedPattern: Pattern[LocalVar], vars: List[LocalVar]) = Pattern.analyze((pattern, patternNav) => new LocalVar(ctx.module, pattern.name, Some(letExpr), patternNav, pattern.datatype, pattern.range), pattern)
     if (analyzedExpr.returnType !~=> analyzedPattern.datatype) throw Error.typeMismatch(analyzedExpr.returnType, analyzedPattern.datatype, analyzedExpr.range, analyzedPattern.range)
     lazy val letExpr = LetExpr(analyzedPattern, analyzedExpr, ctx.module, range)
     ctx.add(vars)

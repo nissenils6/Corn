@@ -7,12 +7,13 @@ import scala.collection.mutable
 
 def simpleOperator(module: => Module, name: String, compileTimeFunction: (Long, Long) => Long, asmOperation: (Address, Reg) => SimpleOpMem): BuiltinGlobalVar =
   new BuiltinGlobalVar(module, name, ConstFunction(new BuiltinFun(module, List(IntDatatype(false), IntDatatype(false)), IntDatatype(false),
-    args => Some(ConstInt(compileTimeFunction(args.head.toInt, args(1).toInt))),
+    Some(args => ConstInt(compileTimeFunction(args.head.toInt, args(1).toInt))),
     () => List(
       Load(Reg.RAX, Reg.RBP + 8),
       asmOperation(Address(Reg.RBP), Reg.RAX),
       Ret()
     ),
+    None,
     ctx => {
       ctx.add(
         Load(Reg.RAX, Reg.RBP + ctx.secondaryOffset + 8),
@@ -24,7 +25,7 @@ def simpleOperator(module: => Module, name: String, compileTimeFunction: (Long, 
 
 def mulOperator(module: => Module): BuiltinGlobalVar =
   new BuiltinGlobalVar(module, "*", ConstFunction(new BuiltinFun(module, List(IntDatatype(false), IntDatatype(false)), IntDatatype(false),
-    args => Some(ConstInt(args.head.toInt * args(1).toInt)),
+    Some(args => ConstInt(args.head.toInt * args(1).toInt)),
     () => List(
       Load(Reg.RAX, Address(Reg.RBP)),
       Load(Reg.RCX, Reg.RBP + 8),
@@ -32,6 +33,7 @@ def mulOperator(module: => Module): BuiltinGlobalVar =
       Store(Address(Reg.RBP), Reg.RAX),
       Ret()
     ),
+    None,
     ctx => {
       ctx.add(
         Load(Reg.RAX, Reg.RBP + ctx.secondaryOffset),
@@ -45,7 +47,7 @@ def mulOperator(module: => Module): BuiltinGlobalVar =
 
 def divOperator(module: => Module, name: String, compileTimeFunction: (Long, Long) => Long, resultReg: Reg): BuiltinGlobalVar =
   new BuiltinGlobalVar(module, name, ConstFunction(new BuiltinFun(module, List(IntDatatype(false), IntDatatype(false)), IntDatatype(false),
-    args => Some(ConstInt(compileTimeFunction(args.head.toInt, args(1).toInt))),
+    Some(args => ConstInt(compileTimeFunction(args.head.toInt, args(1).toInt))),
     () => List(
       Load(Reg.RAX, Address(Reg.RBP)),
       Load(Reg.RCX, Reg.RBP + 8),
@@ -54,6 +56,7 @@ def divOperator(module: => Module, name: String, compileTimeFunction: (Long, Lon
       Store(Address(Reg.RBP), resultReg),
       Ret()
     ),
+    None,
     ctx => {
       ctx.add(
         Load(Reg.RAX, Reg.RBP + ctx.secondaryOffset),
@@ -68,7 +71,7 @@ def divOperator(module: => Module, name: String, compileTimeFunction: (Long, Lon
 
 def comparisonOperator(module: => Module, name: String, compileTimeFunction: (Long, Long) => Boolean, flag: Flag): BuiltinGlobalVar =
   new BuiltinGlobalVar(module, name, ConstFunction(new BuiltinFun(module, List(IntDatatype(false), IntDatatype(false)), BoolDatatype(false),
-    args => Some(ConstBool(compileTimeFunction(args.head.toInt, args(1).toInt))),
+    Some(args => ConstBool(compileTimeFunction(args.head.toInt, args(1).toInt))),
     () => List(
       Load(Reg.RAX, Address(Reg.RBP)),
       Cmp(Reg.RAX, Reg.RBP + 8),
@@ -76,6 +79,7 @@ def comparisonOperator(module: => Module, name: String, compileTimeFunction: (Lo
       Store(Address(Reg.RBP), Reg.RCX, RegSize.Byte),
       Ret()
     ),
+    None,
     ctx => {
       ctx.add(
         Load(Reg.RAX, Reg.RBP + ctx.secondaryOffset),
@@ -110,7 +114,7 @@ def builtinVars(module: => Module): List[GlobalVar] = List(
   comparisonOperator(module, "!=", _ != _, Flag.NotZero),
 
   new BuiltinGlobalVar(module, "println", ConstFunction(new BuiltinFun(module, List(IntDatatype(false)), UnitDatatype(false),
-    _ => None,
+    None,
     () => {
       val noNegLabel = AsmGen.label()
       val loopLabel = AsmGen.label()
@@ -162,14 +166,15 @@ def builtinVars(module: => Module): List[GlobalVar] = List(
         Add(Reg.RSP, 48),
         Ret()
       )
-    }
+    },
+    Some(opt.AsmFun())
   )))
 )
 
 def analyzeFile(stmts: List[syn.GlobalStmt], file: File): Module = {
   lazy val module: Module = new Module(file, {
     val (varInits, userVars) = (for (stmt <- stmts) yield {
-      lazy val (analyzedPattern: Pattern[UserGlobalVar], vars: List[UserGlobalVar]) = Pattern.map((pattern, patternNav) => new UserGlobalVar(module, pattern.name, init, patternNav, pattern.datatype, pattern.range), stmt.pattern)
+      lazy val (analyzedPattern: Pattern[UserGlobalVar], vars: List[UserGlobalVar]) = Pattern.analyze((pattern, patternNav) => new UserGlobalVar(module, pattern.name, init, patternNav, pattern.datatype, pattern.range), stmt.pattern)
       lazy val init = new UserGlobalVarInit(module, stmt.expr, analyzedPattern)
       (init, vars)
     }).unzip

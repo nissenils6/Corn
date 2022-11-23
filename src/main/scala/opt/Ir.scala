@@ -9,8 +9,8 @@ abstract class Datatype {
 }
 
 case object UnitDatatype extends Datatype
-case object BoolDatatype extends Datatype
 case object IntDatatype extends Datatype
+case object BoolDatatype extends Datatype
 case class TupleDatatype(elements: List[Datatype]) extends Datatype
 case class FunDatatype(params: List[Datatype], returnTypes: List[Datatype]) extends Datatype
 
@@ -68,8 +68,10 @@ abstract class Op {
     val phi_edge = graph_phi_edge(this)
 
     this match {
+      case UnitLit(next) => node("()") :: ctrl_edge(next) :: next.op.format(formatted)
       case IntLit(int, next) => node(int.toString) :: ctrl_edge(next) :: next.op.format(formatted)
       case BoolLit(bool, next) => node(bool.toString) :: ctrl_edge(next) :: next.op.format(formatted)
+      case FunLit(fn, next) => ???
       case AddInt(addInts, subInts, next) => node("+") :: ctrl_edge(next) :: (next.op.format(formatted) ::: addInts.map(data_edge) ::: subInts.map(data_edge_label("Negate")))
       case AndInt(ints, next) => node("&") :: ctrl_edge(next) :: (next.op.format(formatted) ::: ints.map(data_edge))
       case OrInt(ints, next) => node("|") :: ctrl_edge(next) :: (next.op.format(formatted) ::: ints.map(data_edge))
@@ -85,19 +87,20 @@ abstract class Op {
       case ReadLocal(local, next) => ???
       case WriteLocal(local, data, next) => ???
       case RefLocal(local, next) => ???
-      case ReadGlobal(global, next) => ???
-      case WriteGlobal(global, data, next) => ???
-      case RefGlobal(global, next) => ???
+      case ReadGlobal(global, idx, next) => node(s"global $global[$idx]") :: ctrl_edge(next) :: next.op.format(formatted)
+      case WriteGlobal(global, idx, data, next) => ???
+      case RefGlobal(global, idx, next) => ???
       case Call(fn, values, next) => ???
-      case CallInd(fn, values, next) => ???
+      case CallInd(fn, values, next) => node("invoke") :: ctrl_edge(next) :: data_edge_sec(fn) :: (next.op.format(formatted) ::: values.map(data_edge))
       case Ret(returnValues) => node("return") :: returnValues.map(data_edge)
     }
-  } else List()
+  } else List.empty
 }
 
 case class UnitLit(next: Controlflow) extends Op
-case class BoolLit(bool: Boolean, next: Controlflow) extends Op
 case class IntLit(int: Long, next: Controlflow) extends Op
+case class BoolLit(bool: Boolean, next: Controlflow) extends Op
+case class FunLit(fn: Int, next: Controlflow) extends Op
 case class AddInt(addInts: List[Dataflow], subInts: List[Dataflow], next: Controlflow) extends Op
 case class AndInt(ints: List[Dataflow], next: Controlflow) extends Op
 case class OrInt(ints: List[Dataflow], next: Controlflow) extends Op
@@ -113,10 +116,10 @@ case class WriteRef(ref: Dataflow, data: Dataflow, next: Controlflow) extends Op
 case class ReadLocal(local: Int, next: Controlflow) extends Op
 case class WriteLocal(local: Int, data: Dataflow, next: Controlflow) extends Op
 case class RefLocal(local: Int, next: Controlflow) extends Op
-case class ReadGlobal(global: Var, next: Controlflow) extends Op
-case class WriteGlobal(global: Var, data: Dataflow, next: Controlflow) extends Op
-case class RefGlobal(global: Var, next: Controlflow) extends Op
-case class Call(fn: Fun, values: List[Dataflow], next: Controlflow) extends Op
+case class ReadGlobal(global: Int, idx: Int, next: Controlflow) extends Op
+case class WriteGlobal(global: Int, idx: Int, data: Dataflow, next: Controlflow) extends Op
+case class RefGlobal(global: Int, idx: Int, next: Controlflow) extends Op
+case class Call(fn: Int, values: List[Dataflow], next: Controlflow) extends Op
 case class CallInd(fn: Dataflow, values: List[Dataflow], next: Controlflow) extends Op
 case class Ret(returnValues: List[Dataflow]) extends Op
 
@@ -136,14 +139,14 @@ case class WindowsFun(name: String) extends Fun {
 
 }
 
-case class Var(entry: Controlflow, datatypes: List[Datatype])
+case class Var(entry: Controlflow, datatypes: Array[Datatype])
 
-case class OptUnit(fns: List[CodeFun], vars: List[Var])
+case class OptUnit(fns: Array[Fun], vars: Array[Var])
 
 def fn: Fun = {
   lazy val int1: IntLit = IntLit(3, int2ctrl)
   lazy val int2: IntLit = IntLit(5, addctrl)
-  lazy val add: AddInt = AddInt(List(int1data, int2data), List(), int3ctrl)
+  lazy val add: AddInt = AddInt(List(int1data, int2data), List.empty, int3ctrl)
   lazy val int3: IntLit = IntLit(8, multctrl)
   lazy val mult: MultInt = MultInt(List(int3data, adddata), retctrl)
   lazy val ret: Ret = Ret(List(multdata))
@@ -161,5 +164,5 @@ def fn: Fun = {
   lazy val int3data: Dataflow = Dataflow(() => Some(int3))
   lazy val multdata: Dataflow = Dataflow(() => Some(mult))
 
-  CodeFun(int1ctrl, FunDatatype(List(), List()), List())
+  CodeFun(int1ctrl, FunDatatype(List.empty, List.empty), List.empty)
 }
