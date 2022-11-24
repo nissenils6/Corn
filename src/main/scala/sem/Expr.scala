@@ -35,15 +35,37 @@ abstract class Expr() {
     case MutExpr(_, _, _, _) => TypeDatatype(false)
   }
 
-  def gatherFuns: List[Fun] = this match {
-    case CallExpr(function, args, _, _) => function.gatherFuns ::: args.flatMap(_.gatherFuns)
-    case ValExpr(expr, _, _) => expr.gatherFuns
-    case TupleExpr(elements, _, _) => elements.flatMap(_.gatherFuns)
-    case BlockExpr(exprs, lastExpr, _, _, _) => lastExpr.gatherFuns ::: exprs.flatMap(_.gatherFuns)
-    case LetExpr(_, expr, _, _) => expr.gatherFuns
-    case AssignExpr(left, right, _, _) => left.gatherFuns ::: right.gatherFuns
-    case FunExpr(fun, _, _) => fun.gatherFuns
-    case IfExpr(condition, ifBlock, elseBlock, _, _) => condition.gatherFuns ::: ifBlock.gatherFuns ::: elseBlock.gatherFuns
+  def gatherFuns(funs: mutable.Set[Fun]): Unit = this match {
+    case CallExpr(function, args, _, _) =>
+      function.gatherFuns(funs)
+      args.foreach(_.gatherFuns(funs))
+    case ValExpr(expr, _, _) => expr.gatherFuns(funs)
+    case TupleExpr(elements, _, _) =>
+      elements.foreach(_.gatherFuns(funs))
+    case BlockExpr(exprs, lastExpr, _, _, _) =>
+      exprs.foreach(_.gatherFuns(funs))
+      lastExpr.gatherFuns(funs)
+    case LetExpr(_, expr, _, _) => expr.gatherFuns(funs)
+    case AssignExpr(left, right, _, _) =>
+      left.gatherFuns(funs)
+      right.gatherFuns(funs)
+    case FunExpr(fun, _, _) =>
+      fun.gatherFuns(funs)
+    case IfExpr(condition, ifBlock, elseBlock, _, _) =>
+      condition.gatherFuns(funs)
+      ifBlock.gatherFuns(funs)
+      elseBlock.gatherFuns(funs)
+    case _ => ()
+  }
+
+  lazy val gatherLocals: List[LocalVar] = this match {
+    case CallExpr(function, args, _, _) => function.gatherLocals ::: args.flatMap(_.gatherLocals)
+    case ValExpr(expr, _, _) => expr.gatherLocals
+    case TupleExpr(elements, _, _) => elements.flatMap(_.gatherLocals)
+    case BlockExpr(exprs, lastExpr, _, _, _) => lastExpr.gatherLocals ::: exprs.flatMap(_.gatherLocals)
+    case LetExpr(_, expr, _, _) => expr.gatherLocals
+    case AssignExpr(left, right, _, _) => left.gatherLocals ::: right.gatherLocals
+    case IfExpr(condition, ifBlock, elseBlock, _, _) => condition.gatherLocals ::: ifBlock.gatherLocals ::: elseBlock.gatherLocals
     case _ => List.empty
   }
 
@@ -330,12 +352,12 @@ abstract class Expr() {
     case MutExpr(_, _, _, range) => Error.todo("", range)
   }
 
-  def generateIr(nextCtrl: opt.Controlflow, globalVars: Map[GlobalVar, Int], funs: Map[Fun, Int], localVars: Map[LocalVar, Int], counter: Counter): (opt.Dataflow, opt.Controlflow) = this match {
+  def generateIr(nextCtrl: opt.Controlflow, context: IrGenContext, localVars: Map[LocalVar, Int]): (opt.Dataflow, opt.Controlflow) = this match {
     case CallExpr(function, args, _, _) =>
-      lazy val (fnExprData: opt.Dataflow, fnExprCtrl: opt.Controlflow) = function.generateIr(argsCtrl, globalVars, funs, localVars, counter)
+      lazy val (fnExprData: opt.Dataflow, fnExprCtrl: opt.Controlflow) = function.generateIr(argsCtrl, context, localVars)
       lazy val (argsCtrl: opt.Controlflow, argsData: List[opt.Dataflow]) = args.foldRight((callCtrl, List[opt.Dataflow]()))((arg, tuple) => {
         val (ctrl, argsData) = tuple
-        lazy val (argData: opt.Dataflow, argCtrl: opt.Controlflow) = arg.generateIr(ctrl, globalVars, funs, localVars, counter)
+        lazy val (argData: opt.Dataflow, argCtrl: opt.Controlflow) = arg.generateIr(ctrl, context, localVars)
         (argCtrl, argData :: argsData)
       })
       lazy val callOp: opt.Op = opt.CallInd(fnExprData, argsData, nextCtrl)
@@ -344,7 +366,8 @@ abstract class Expr() {
       lazy val callCtrl: opt.Controlflow = opt.Controlflow(() => callOp)
       (callData, fnExprCtrl)
     case GlobalVarExpr(globalVar, _, _) =>
-      lazy val intOp: opt.Op = opt.ReadGlobal(globalVars(globalVar), 0, nextCtrl) // todo FIX ZERO
+      lazy val (optVar: opt.Var, index: Int) = context(globalVar)
+      lazy val intOp: opt.Op = opt.ReadGlobal(() => optVar, index, nextCtrl)
       lazy val intData: opt.Dataflow = opt.Dataflow(() => Some(intOp))
       lazy val intCtrl: opt.Controlflow = opt.Controlflow(() => intOp)
       (intData, intCtrl)
@@ -364,12 +387,8 @@ abstract class Expr() {
       (boolData, boolCtrl)
     case TupleExpr(elements, _, _) => ???
     case BlockExpr(exprs, lastExpr, vars, _, _) =>
-      val newLocalVars = if vars.nonEmpty then localVars.concat(vars.map(localVar => (localVar, counter.next(localVar))).toMap) else localVars
-      lazy val exprsCtrl: opt.Controlflow = exprs.foldRight(lastExprCtrl)((expr, ctrl) => {
-        expr.generateIr(ctrl, globalVars, funs, newLocalVars, counter)._2
-      })
-
-      lazy val (lastExprData: opt.Dataflow, lastExprCtrl: opt.Controlflow) = lastExpr.generateIr(nextCtrl, globalVars, funs, newLocalVars, counter)
+      lazy val exprsCtrl: opt.Controlflow = exprs.foldRight(lastExprCtrl)((expr, ctrl) => expr.generateIr(ctrl, context, localVars)._2)
+      lazy val (lastExprData: opt.Dataflow, lastExprCtrl: opt.Controlflow) = lastExpr.generateIr(nextCtrl, context, localVars)
       (lastExprData, exprsCtrl)
     case UnitExpr(_, _) =>
       lazy val unitOp: opt.Op = opt.UnitLit(nextCtrl)
@@ -377,12 +396,12 @@ abstract class Expr() {
       lazy val unitCtrl: opt.Controlflow = opt.Controlflow(() => unitOp)
       (unitData, unitCtrl)
     case LetExpr(pattern, expr, _, _) =>
-      lazy val (exprData: opt.Dataflow, exprCtrl: opt.Controlflow) = expr.generateIr(patternCtrl, globalVars, funs, localVars, counter)
+      lazy val (exprData: opt.Dataflow, exprCtrl: opt.Controlflow) = expr.generateIr(patternCtrl, context, localVars)
       lazy val patternCtrl: opt.Controlflow = Pattern.generateIrLocal(pattern, exprData, nextCtrl, localVars)
       (exprData, exprCtrl)
     case AssignExpr(left, right, _, _) => ???
     case FunExpr(fun, _, _) =>
-      lazy val funOp: opt.Op = opt.FunLit(funs(fun), nextCtrl)
+      lazy val funOp: opt.Op = opt.FunLit(() => context(fun), nextCtrl)
       lazy val funData: opt.Dataflow = opt.Dataflow(() => Some(funOp))
       lazy val funCtrl: opt.Controlflow = opt.Controlflow(() => funOp)
       (funData, funCtrl)
@@ -415,39 +434,22 @@ abstract class Expr() {
 }
 
 case class CallExpr(function: Expr, args: List[Expr], module: Module, range: FilePosRange) extends Expr
-
 case class GlobalVarExpr(globalVar: GlobalVar, module: Module, range: FilePosRange) extends Expr
-
 case class RefGlobalVarExpr(globalVar: GlobalVar, module: Module, range: FilePosRange) extends Expr
-
 case class LocalVarExpr(localVar: LocalVar, module: Module, range: FilePosRange) extends Expr
-
 case class RefLocalVarExpr(localVar: LocalVar, module: Module, range: FilePosRange) extends Expr
-
 case class ValExpr(expr: Expr, module: Module, range: FilePosRange) extends Expr
-
 case class IntExpr(int: Long, module: Module, range: FilePosRange) extends Expr
-
 case class BoolExpr(bool: Boolean, module: Module, range: FilePosRange) extends Expr
-
 case class TupleExpr(elements: List[Expr], module: Module, range: FilePosRange) extends Expr
-
 case class BlockExpr(exprs: List[Expr], lastExpr: Expr, vars: List[LocalVar], module: Module, range: FilePosRange) extends Expr
-
 case class UnitExpr(module: Module, range: FilePosRange) extends Expr
-
 case class LetExpr(pattern: Pattern[LocalVar], expr: Expr, module: Module, range: FilePosRange) extends Expr
-
 case class AssignExpr(left: Expr, right: Expr, module: Module, range: FilePosRange) extends Expr
-
 case class FunExpr(fun: Fun, module: Module, range: FilePosRange) extends Expr
-
 case class FunTypeExpr(parameters: List[Expr], returnTypeExpr: Expr, module: Module, range: FilePosRange) extends Expr
-
 case class RefTypeExpr(expr: Expr, module: Module, range: FilePosRange) extends Expr
-
 case class IfExpr(condition: Expr, ifBlock: Expr, elseBlock: Expr, module: Module, range: FilePosRange) extends Expr
-
 case class MutExpr(expr: Expr, mutable: Boolean, module: Module, range: FilePosRange) extends Expr
 
 class LocalVar(val module: Module, val name: String, letExpr: => Option[LetExpr], patternNav: PatternNav, typeExpr: Option[syn.Expr], val range: FilePosRange) extends Var {

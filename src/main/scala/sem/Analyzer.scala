@@ -2,10 +2,23 @@ package sem
 
 import core.*
 import gen.*
+import opt.{CodeFun, Controlflow, Dataflow}
 
 import scala.collection.mutable
 
-def simpleOperator(module: => Module, name: String, compileTimeFunction: (Long, Long) => Long, asmOperation: (Address, Reg) => SimpleOpMem): BuiltinGlobalVar =
+type GraphOp = (opt.Dataflow, opt.Dataflow, opt.Controlflow) => opt.Op
+
+def binaryOperatorGraph(graphOp: GraphOp, params: List[opt.Datatype], returnType: opt.Datatype): Option[opt.Fun] = {
+  lazy val op: opt.Op = graphOp(opt.Dataflow(() => None), opt.Dataflow(() => None, 1), retCtrl)
+  lazy val opCtrl: opt.Controlflow = opt.Controlflow(() => op)
+  lazy val opData: opt.Dataflow = opt.Dataflow(() => Some(op))
+
+  lazy val retOp: opt.Op = opt.Ret(List(opData))
+  lazy val retCtrl: opt.Controlflow = opt.Controlflow(() => retOp)
+  Some(new CodeFun(opCtrl, opt.FunDatatype(params, List(returnType)), List()))
+}
+
+def simpleOperator(module: => Module, name: String, compileTimeFunction: (Long, Long) => Long, asmOperation: (Address, Reg) => SimpleOpMem, graphOp: GraphOp): BuiltinGlobalVar =
   new BuiltinGlobalVar(module, name, ConstFunction(new BuiltinFun(module, List(IntDatatype(false), IntDatatype(false)), IntDatatype(false),
     Some(args => ConstInt(compileTimeFunction(args.head.toInt, args(1).toInt))),
     () => List(
@@ -13,7 +26,7 @@ def simpleOperator(module: => Module, name: String, compileTimeFunction: (Long, 
       asmOperation(Address(Reg.RBP), Reg.RAX),
       Ret()
     ),
-    None,
+    binaryOperatorGraph(graphOp, List(opt.IntDatatype, opt.IntDatatype), opt.IntDatatype),
     ctx => {
       ctx.add(
         Load(Reg.RAX, Reg.RBP + ctx.secondaryOffset + 8),
@@ -33,7 +46,7 @@ def mulOperator(module: => Module): BuiltinGlobalVar =
       Store(Address(Reg.RBP), Reg.RAX),
       Ret()
     ),
-    None,
+    binaryOperatorGraph((data1, data2, nextCtrl) => opt.MultInt(List(data1, data2), nextCtrl), List(opt.IntDatatype, opt.IntDatatype), opt.IntDatatype),
     ctx => {
       ctx.add(
         Load(Reg.RAX, Reg.RBP + ctx.secondaryOffset),
@@ -45,7 +58,7 @@ def mulOperator(module: => Module): BuiltinGlobalVar =
     }
   )))
 
-def divOperator(module: => Module, name: String, compileTimeFunction: (Long, Long) => Long, resultReg: Reg): BuiltinGlobalVar =
+def divOperator(module: => Module, name: String, compileTimeFunction: (Long, Long) => Long, resultReg: Reg, graphOp: GraphOp): BuiltinGlobalVar =
   new BuiltinGlobalVar(module, name, ConstFunction(new BuiltinFun(module, List(IntDatatype(false), IntDatatype(false)), IntDatatype(false),
     Some(args => ConstInt(compileTimeFunction(args.head.toInt, args(1).toInt))),
     () => List(
@@ -56,7 +69,7 @@ def divOperator(module: => Module, name: String, compileTimeFunction: (Long, Lon
       Store(Address(Reg.RBP), resultReg),
       Ret()
     ),
-    None,
+    binaryOperatorGraph(graphOp, List(opt.IntDatatype, opt.IntDatatype), opt.IntDatatype),
     ctx => {
       ctx.add(
         Load(Reg.RAX, Reg.RBP + ctx.secondaryOffset),
@@ -69,7 +82,7 @@ def divOperator(module: => Module, name: String, compileTimeFunction: (Long, Lon
     }
   )))
 
-def comparisonOperator(module: => Module, name: String, compileTimeFunction: (Long, Long) => Boolean, flag: Flag): BuiltinGlobalVar =
+def comparisonOperator(module: => Module, name: String, compileTimeFunction: (Long, Long) => Boolean, flag: Flag, graphOp: GraphOp): BuiltinGlobalVar =
   new BuiltinGlobalVar(module, name, ConstFunction(new BuiltinFun(module, List(IntDatatype(false), IntDatatype(false)), BoolDatatype(false),
     Some(args => ConstBool(compileTimeFunction(args.head.toInt, args(1).toInt))),
     () => List(
@@ -79,7 +92,7 @@ def comparisonOperator(module: => Module, name: String, compileTimeFunction: (Lo
       Store(Address(Reg.RBP), Reg.RCX, RegSize.Byte),
       Ret()
     ),
-    None,
+    binaryOperatorGraph(graphOp, List(opt.IntDatatype, opt.IntDatatype), opt.BoolDatatype),
     ctx => {
       ctx.add(
         Load(Reg.RAX, Reg.RBP + ctx.secondaryOffset),
@@ -96,22 +109,22 @@ def builtinVars(module: => Module): List[GlobalVar] = List(
   new BuiltinGlobalVar(module, "Bool", ConstType(BoolDatatype(false))),
   new BuiltinGlobalVar(module, "Type", ConstType(TypeDatatype(false))),
 
-  simpleOperator(module, "+", _ + _, Add.apply),
-  simpleOperator(module, "-", _ - _, Sub.apply),
-  simpleOperator(module, "&", _ & _, And.apply),
-  simpleOperator(module, "|", _ | _, Or.apply),
-  simpleOperator(module, "^", _ ^ _, Xor.apply),
+  simpleOperator(module, "+", _ + _, Add.apply, (data1, data2, nextCtrl) => opt.AddInt(List(data1, data2), List(), nextCtrl)),
+  simpleOperator(module, "-", _ - _, Sub.apply, (data1, data2, nextCtrl) => opt.AddInt(List(data1), List(data2), nextCtrl)),
+  simpleOperator(module, "&", _ & _, And.apply, (data1, data2, nextCtrl) => opt.AndInt(List(data1, data2), nextCtrl)),
+  simpleOperator(module, "|", _ | _, Or.apply, (data1, data2, nextCtrl) => opt.OrInt(List(data1, data2), nextCtrl)),
+  simpleOperator(module, "^", _ ^ _, Xor.apply, (data1, data2, nextCtrl) => opt.XorInt(List(data1, data2), nextCtrl)),
 
   mulOperator(module),
-  divOperator(module, "/", _ / _, Reg.RAX),
-  divOperator(module, "%", _ % _, Reg.RDX),
+  divOperator(module, "/", _ / _, Reg.RAX, (data1, data2, nextCtrl) => opt.DivInt(data1, data2, nextCtrl)),
+  divOperator(module, "%", _ % _, Reg.RDX, (data1, data2, nextCtrl) => opt.ModInt(data1, data2, nextCtrl)),
 
-  comparisonOperator(module, ">", _ > _, Flag.Greater),
-  comparisonOperator(module, "<", _ < _, Flag.Less),
-  comparisonOperator(module, ">=", _ >= _, Flag.GreaterOrEqual),
-  comparisonOperator(module, "<=", _ <= _, Flag.LessOrEqual),
-  comparisonOperator(module, "==", _ == _, Flag.Zero),
-  comparisonOperator(module, "!=", _ != _, Flag.NotZero),
+//  comparisonOperator(module, ">", _ > _, Flag.Greater),
+//  comparisonOperator(module, "<", _ < _, Flag.Less),
+//  comparisonOperator(module, ">=", _ >= _, Flag.GreaterOrEqual),
+//  comparisonOperator(module, "<=", _ <= _, Flag.LessOrEqual),
+//  comparisonOperator(module, "==", _ == _, Flag.Zero),
+//  comparisonOperator(module, "!=", _ != _, Flag.NotZero),
 
   new BuiltinGlobalVar(module, "println", ConstFunction(new BuiltinFun(module, List(IntDatatype(false)), UnitDatatype(false),
     None,
@@ -167,7 +180,7 @@ def builtinVars(module: => Module): List[GlobalVar] = List(
         Ret()
       )
     },
-    Some(opt.AsmFun())
+    Some(IrGenBuiltin.printlnFun)
   )))
 )
 

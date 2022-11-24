@@ -82,17 +82,11 @@ abstract class Datatype {
 }
 
 case class UnitDatatype(mutable: Boolean) extends Datatype
-
 case class IntDatatype(mutable: Boolean) extends Datatype
-
 case class BoolDatatype(mutable: Boolean) extends Datatype
-
 case class TypeDatatype(mutable: Boolean) extends Datatype
-
 case class RefDatatype(datatype: Datatype, mutable: Boolean) extends Datatype
-
 case class TupleDatatype(elements: List[Datatype], mutable: Boolean) extends Datatype
-
 case class FunDatatype(params: List[Datatype], returnType: Datatype, mutable: Boolean) extends Datatype
 
 object Datatype {
@@ -135,6 +129,30 @@ abstract class ConstVal {
     case _ => None
   }
 
+  def generateIr(nextCtrl: opt.Controlflow, context: IrGenContext): (opt.Dataflow, opt.Controlflow) = this match {
+    case ConstUnit =>
+      lazy val unitOp: opt.Op = opt.UnitLit(nextCtrl)
+      lazy val unitData: opt.Dataflow = opt.Dataflow(() => Some(unitOp))
+      lazy val unitCtrl: opt.Controlflow = opt.Controlflow(() => unitOp)
+      (unitData, unitCtrl)
+    case ConstInt(int) =>
+      lazy val intOp: opt.Op = opt.IntLit(int, nextCtrl)
+      lazy val intData: opt.Dataflow = opt.Dataflow(() => Some(intOp))
+      lazy val intCtrl: opt.Controlflow = opt.Controlflow(() => intOp)
+      (intData, intCtrl)
+    case ConstBool(bool) =>
+      lazy val boolOp: opt.Op = opt.BoolLit(bool, nextCtrl)
+      lazy val boolData: opt.Dataflow = opt.Dataflow(() => Some(boolOp))
+      lazy val boolCtrl: opt.Controlflow = opt.Controlflow(() => boolOp)
+      (boolData, boolCtrl)
+    case ConstTuple(elements) => ???
+    case ConstFunction(fun) =>
+      lazy val funOp: opt.Op = opt.FunLit(() => context(fun), nextCtrl)
+      lazy val funData: opt.Dataflow = opt.Dataflow(() => Some(funOp))
+      lazy val funCtrl: opt.Controlflow = opt.Controlflow(() => funOp)
+      (funData, funCtrl)
+  }
+
   def toInt: Long = this.asInt.get.int
   def toBool: Boolean = this.asBool.get.bool
 
@@ -159,6 +177,12 @@ abstract class ConstVal {
     )
     case ConstUnit | ConstType(_) => List.empty
   }
+  
+  def gatherFuns(funs: mutable.Set[Fun]): Unit = this match {
+    case ConstTuple(elements) => elements.foreach(_.gatherFuns(funs))
+    case ConstFunction(function) => funs.add(function)
+    case _ => ()
+  }
 
   override def toString: String = this match {
     case ConstUnit => "()"
@@ -173,17 +197,11 @@ abstract class ConstVal {
 }
 
 case object ConstUnit extends ConstVal
-
 case class ConstInt(int: Long) extends ConstVal
-
 case class ConstBool(bool: Boolean) extends ConstVal
-
 case class ConstType(valDatatype: Datatype) extends ConstVal
-
 case class ConstRef(box: RefBox) extends ConstVal
-
 case class ConstTuple(elements: List[ConstVal]) extends ConstVal
-
 case class ConstFunction(function: Fun) extends ConstVal
 
 abstract class RefBox

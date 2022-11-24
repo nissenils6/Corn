@@ -18,7 +18,6 @@ abstract class Pattern[T <: Var] {
 }
 
 case class VarPattern[T <: Var](patternVar: T, range: FilePosRange) extends Pattern[T]
-
 case class TuplePattern[T <: Var](elements: List[Pattern[T]], range: FilePosRange) extends Pattern[T]
 
 abstract class PatternNav {
@@ -34,7 +33,6 @@ abstract class PatternNav {
 }
 
 case object VarPatternNav extends PatternNav
-
 case class TuplePatternNav(index: Int, next: PatternNav) extends PatternNav
 
 object Pattern {
@@ -80,15 +78,15 @@ object Pattern {
   
   // def generateIrGlobal(pattern: Pattern[UserGlobalVar], expr: opt.Dataflow, nextCtrl: opt.Controlflow, globalVars: Map[GlobalVar, Int]): opt.Controlflow = generateIr(pattern, expr, nextCtrl, (patternVar, expr, nextCtrl) => opt.WriteGlobal(globalVars(patternVar), expr, nextCtrl))
   
-  def generateIrGlobal(pattern: Pattern[UserGlobalVar], expr: opt.Dataflow, nextCtrl: opt.Controlflow, globalVars: Map[GlobalVar, Int]): (opt.Controlflow, List[(opt.Datatype, opt.Dataflow)]) = pattern match {
+  def generateIrGlobal(pattern: Pattern[UserGlobalVar], expr: opt.Dataflow, nextCtrl: opt.Controlflow): (opt.Controlflow, List[(GlobalVar, opt.Datatype, opt.Dataflow)]) = pattern match {
     case VarPattern(patternVar, _) =>
-      (nextCtrl, List((patternVar.datatype.optDatatype, expr)))
+      (nextCtrl, List((patternVar, patternVar.datatype.optDatatype, expr)))
     case TuplePattern(elements, _) =>
-      elements.zipWithIndex.foldRight((nextCtrl, List[(opt.Datatype, opt.Dataflow)]()))((element, previous) => {
+      elements.zipWithIndex.foldRight((nextCtrl, List[(GlobalVar, opt.Datatype, opt.Dataflow)]()))((element, previous) => {
         val (subPattern, index) = element
         val (ctrl, prevData) = previous
         lazy val idxOp: opt.TupleIdx = opt.TupleIdx(expr, index, patternCtrl)
-        lazy val (patternCtrl: opt.Controlflow, data: List[(opt.Datatype, opt.Dataflow)]) = generateIrGlobal(subPattern, idxData, ctrl, globalVars)
+        lazy val (patternCtrl: opt.Controlflow, data: List[(GlobalVar, opt.Datatype, opt.Dataflow)]) = generateIrGlobal(subPattern, idxData, ctrl)
         lazy val idxCtrl: opt.Controlflow = opt.Controlflow(() => idxOp)
         lazy val idxData: opt.Dataflow = opt.Dataflow(() => Some(idxOp))
         (idxCtrl, data ::: prevData)

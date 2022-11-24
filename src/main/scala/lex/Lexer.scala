@@ -44,15 +44,10 @@ case class IdenToken(iden: String, range: FilePosRange) extends Token {
 }
 
 case class SymbolToken(symbol: String, range: FilePosRange) extends Token
-
 case class KeywordToken(keyword: String, range: FilePosRange) extends Token
-
 case class IntToken(int: Long, range: FilePosRange) extends Token
-
 case class FloatToken(float: Double, range: FilePosRange) extends Token
-
 case class CharToken(char: Char, range: FilePosRange) extends Token
-
 case class StringToken(string: String, range: FilePosRange) extends Token
 
 private val idenSymbols = "+-*/%<>=!&|^~?:".toSet
@@ -71,13 +66,9 @@ def unescapeChar(char: Char): String = if (escapedCharsInverted.contains(char)) 
 abstract class LexerState
 
 case object BlankState extends LexerState
-
 case class IdenState(isSym: Boolean, iden: List[Char], range: FilePosRange) extends LexerState
-
 case class NumberState(num: List[Char], range: FilePosRange) extends LexerState
-
 case class StringState(isChar: Boolean, string: List[Char], range: FilePosRange) extends LexerState
-
 case class CommentState(isBlock: Boolean) extends LexerState
 
 object IdenStartChar {

@@ -45,37 +45,21 @@ abstract class Expr {
 }
 
 case class CallExpr(function: Expr, posArgs: List[Expr], range: FilePosRange) extends Expr
-
 case class IdenExpr(iden: String, range: FilePosRange) extends Expr
-
 case class RefExpr(expr: Expr, range: FilePosRange) extends Expr
-
 case class ValExpr(expr: Expr, range: FilePosRange) extends Expr
-
 case class IntExpr(int: Long, range: FilePosRange) extends Expr
-
 case class BoolExpr(bool: Boolean, range: FilePosRange) extends Expr
-
 case class TupleExpr(elements: List[Expr], range: FilePosRange) extends Expr
-
 case class BlockExpr(exprs: List[Expr], lastExpr: Expr, range: FilePosRange) extends Expr
-
 case class UnitExpr(range: FilePosRange) extends Expr
-
 case class DotExpr(expr: Expr, iden: String, range: FilePosRange) extends Expr
-
 case class LetExpr(pattern: Pattern, expr: Expr, range: FilePosRange) extends Expr
-
 case class AssignExpr(left: Expr, right: Expr, range: FilePosRange) extends Expr
-
 case class FunExpr(parameters: List[Pattern], returnType: Option[Expr], expr: Expr, range: FilePosRange) extends Expr
-
 case class FunTypeExpr(parameters: List[Expr], returnType: Expr, range: FilePosRange) extends Expr
-
 case class IfExpr(condition: Expr, ifBlock: Expr, elseBlock: Expr, range: FilePosRange) extends Expr
-
 case class WhileExpr(condition: Expr, ifBlock: Expr, range: FilePosRange) extends Expr
-
 case class MutExpr(expr: Expr, mutable: Boolean, range: FilePosRange, kwRange: FilePosRange) extends Expr
 
 abstract class Pattern {
@@ -88,7 +72,6 @@ abstract class Pattern {
 }
 
 case class VarPattern(name: String, datatype: Option[Expr], range: FilePosRange) extends Pattern
-
 case class TuplePattern(elements: List[Pattern], range: FilePosRange) extends Pattern
 
 case class GlobalStmt(pattern: Pattern, expr: Expr, range: FilePosRange) {

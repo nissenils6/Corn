@@ -7,7 +7,7 @@ import syn.{GlobalStmt, ParserState, parseFile}
 import java.io.PrintWriter
 import scala.languageFeature.implicitConversions
 
-private val ON_DEKSTOP = false
+private val ON_DEKSTOP = true
 
 private val PATH = if ON_DEKSTOP then "C:/Users/nisse/OneDrive/Skrivbord/Corn/TestCode" else "C:/Users/nisse/Desktop/Corn/TestCode"
 
@@ -36,9 +36,7 @@ def time[T](name: String, expr: => T): T = {
 
   val optUnit = module.generateIr()
 
-  optUnit.fns.foreach {
-    case fun: opt.CodeFun => println(fun.format())
-  }
+  println(optUnit.format())
 
   println()
   println(List(tokens.mkString(" "), parsedFile.mkString("\n\n"), module.format(0)).mkString("-" * 128 + "\n\n", "\n\n" + "-" * 128 + "\n\n", "\n\n" + "-" * 128))
@@ -48,10 +46,3 @@ def time[T](name: String, expr: => T): T = {
     print("\n" * 8)
     print(error)
 }
-
-//@main def main(): Unit = {
-//  new PrintWriter(DOT_PATH) {
-//    write(opt.fn.format())
-//    close()
-//  }
-//}

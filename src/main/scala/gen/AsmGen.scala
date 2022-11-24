@@ -56,53 +56,29 @@ abstract class Instr {
 }
 
 case class SimpleOpReg(op: SimpleOp, dst: Reg, src: Reg, comment: Option[String] = None) extends Instr
-
 case class SimpleOpImm(op: SimpleOp, dst: Reg, src: Int, comment: Option[String] = None) extends Instr
-
 case class SimpleOpAddress(op: SimpleOp, dst: Reg, src: Address, comment: Option[String] = None) extends Instr
-
 case class SimpleOpMem(op: SimpleOp, dst: Address, src: Reg, comment: Option[String] = None) extends Instr
-
 case class SimpleOpMemImm(op: SimpleOp, dst: Address, src: Int, comment: Option[String] = None) extends Instr
-
 case class Neg(reg: Reg, comment: Option[String] = None) extends Instr
-
 case class Imul(dst: Reg, src: Reg, comment: Option[String] = None) extends Instr
-
 case class Idiv(src: Reg, comment: Option[String] = None) extends Instr
-
 case class Mov(dst: Reg, src: Reg, comment: Option[String] = None) extends Instr
-
 case class Load(dst: Reg, address: Address, regSize: RegSize = RegSize.QWord, comment: Option[String] = None) extends Instr
-
 case class LoadImm(dst: Reg, imm: Long, regSize: RegSize = RegSize.QWord, comment: Option[String] = None) extends Instr
-
 case class Store(address: Address, src: Reg, regSize: RegSize = RegSize.QWord, comment: Option[String] = None) extends Instr
-
 case class StoreImm(address: Address, imm: Int, regSize: RegSize = RegSize.QWord, comment: Option[String] = None) extends Instr
-
 case class Lea(dst: Reg, address: Address, comment: Option[String] = None) extends Instr
-
 case class DirJump(target: String, comment: Option[String] = None) extends Instr
-
 case class DirCondJump(target: String, flag: Flag, comment: Option[String] = None) extends Instr
-
 case class IndJump(address: Address, comment: Option[String] = None) extends Instr
-
 case class SetCond(dst: Reg, flag: Flag, comment: Option[String] = None) extends Instr
-
 case class DirCall(target: String, comment: Option[String] = None) extends Instr
-
 case class IndRegCall(reg: Reg, comment: Option[String] = None) extends Instr
-
 case class IndCall(address: Address, comment: Option[String] = None) extends Instr
-
 case class Ret(comment: Option[String] = None) extends Instr
-
 case class Push(reg: Reg, comment: Option[String] = None) extends Instr
-
 case class Pop(reg: Reg, comment: Option[String] = None) extends Instr
-
 case class Label(label: String, comment: Option[String] = None) extends Instr
 
 abstract class Address {

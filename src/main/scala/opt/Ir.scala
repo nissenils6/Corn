@@ -2,6 +2,7 @@ package opt
 
 import gen.AsmGen.label
 
+import scala.::
 import scala.collection.mutable
 
 abstract class Datatype {
@@ -30,21 +31,23 @@ object Controlflow {
   def unapply(controlflow: Controlflow): Option[Op] = Some(controlflow.op)
 }
 
+def graph(lines: List[String]): String = s"${lines.map(" " * 8 + _).mkString("\n")}"
+
 def graph_node(main: Op)(label: String): String = s"Op_${main.id} [label = \"$label\"]"
 
-def graph_data_edge(main: Op)(dataflow: Dataflow): String = dataflow.value match {
+def graph_data_edge(main: Op, funIndex: Int)(dataflow: Dataflow): String = dataflow.value match {
   case Some(op) => s"Op_${op.id} -> Op_${main.id} [color = purple]"
-  case None => s"Par_${dataflow.idx} -> Op_${main.id} [color = purple]"
+  case None => s"Par_${funIndex}_${dataflow.idx} -> Op_${main.id} [color = purple]"
 }
 
-def graph_data_edge_sec(main: Op)(dataflow: Dataflow): String = dataflow.value match {
+def graph_data_edge_sec(main: Op, funIndex: Int)(dataflow: Dataflow): String = dataflow.value match {
   case Some(op) => s"Op_${op.id} -> Op_${main.id} [color = blue]"
-  case None => s"Par_${dataflow.idx} -> Op_${main.id} [color = blue]"
+  case None => s"Par_${funIndex}_${dataflow.idx} -> Op_${main.id} [color = blue]"
 }
 
-def graph_data_edge_label(main: Op)(label: String)(dataflow: Dataflow): String = dataflow.value match {
+def graph_data_edge_label(main: Op, funIndex: Int)(label: String)(dataflow: Dataflow): String = dataflow.value match {
   case Some(op) => s"Op_${op.id} -> Op_${main.id} [color = purple, label = \"$label\"]"
-  case None => s"Par_${dataflow.idx} -> Op_${main.id} [color = purple, label = '\"$label\"]"
+  case None => s"Par_${funIndex}_${dataflow.idx} -> Op_${main.id} [color = purple, label = \"$label\"]"
 }
 
 def graph_ctrl_edge(main: Op)(controlflow: Controlflow): String = s"Op_${main.id} -> Op_${controlflow.op.id} [color = orange]"
@@ -56,42 +59,44 @@ def graph_phi_edge(main: Op)(branch: Branch): String = s"Op_${main.id} -> Op_${b
 abstract class Op {
   lazy val id = (math.random() * 1e15).toLong
 
-  def format(formatted: mutable.Set[Long]): List[String] = if (!formatted.contains(id)) {
+  def format(formatted: mutable.Set[Long], funIndex: Int, funIds: Map[Fun, Int], varIds: Map[Var, Int]): List[String] = if (!formatted.contains(id)) {
     formatted.add(id)
 
     val node = graph_node(this)
-    val data_edge = graph_data_edge(this)
-    val data_edge_sec = graph_data_edge_sec(this)
-    val data_edge_label = graph_data_edge_label(this)
+    val data_edge = graph_data_edge(this, funIndex)
+    val data_edge_sec = graph_data_edge_sec(this, funIndex)
+    val data_edge_label = graph_data_edge_label(this, funIndex)
     val ctrl_edge = graph_ctrl_edge(this)
     val ctrl_edge_sec = graph_ctrl_edge_sec(this)
     val phi_edge = graph_phi_edge(this)
 
+    def recur(next: Controlflow): List[String] = next.op.format(formatted, funIndex, funIds, varIds)
+
     this match {
-      case UnitLit(next) => node("()") :: ctrl_edge(next) :: next.op.format(formatted)
-      case IntLit(int, next) => node(int.toString) :: ctrl_edge(next) :: next.op.format(formatted)
-      case BoolLit(bool, next) => node(bool.toString) :: ctrl_edge(next) :: next.op.format(formatted)
-      case FunLit(fn, next) => ???
-      case AddInt(addInts, subInts, next) => node("+") :: ctrl_edge(next) :: (next.op.format(formatted) ::: addInts.map(data_edge) ::: subInts.map(data_edge_label("Negate")))
-      case AndInt(ints, next) => node("&") :: ctrl_edge(next) :: (next.op.format(formatted) ::: ints.map(data_edge))
-      case OrInt(ints, next) => node("|") :: ctrl_edge(next) :: (next.op.format(formatted) ::: ints.map(data_edge))
-      case XorInt(ints, next) => node("^") :: ctrl_edge(next) :: (next.op.format(formatted) ::: ints.map(data_edge))
-      case MultInt(ints, next) => node("*") :: ctrl_edge(next) :: (next.op.format(formatted) ::: ints.map(data_edge))
-      case DivInt(dividend, divisor, next) => node("/") :: ctrl_edge(next) :: data_edge_label("Dividend")(dividend) :: data_edge_label("Divisor")(divisor) :: next.op.format(formatted)
-      case ModInt(dividend, divisor, next) => node("%") :: ctrl_edge(next) :: data_edge_label("Dividend")(dividend) :: data_edge_label("Divisor")(divisor) :: next.op.format(formatted)
-      case Branch(condition, ifTrue, ifFalse) => node("branch") :: data_edge(condition) :: ctrl_edge(ifTrue) :: ctrl_edge_sec(ifFalse) :: (ifTrue.op.format(formatted) ::: ifFalse.op.format(formatted))
-      case Phi(branch, ifTrue, ifFalse, next) => node("phi") :: phi_edge(branch) :: data_edge(ifTrue) :: data_edge_sec(ifFalse) :: next.op.format(formatted)
-      case TupleIdx(tuple, idx, next) => node(s"Tuple[$idx]") :: data_edge(tuple) :: next.op.format(formatted)
+      case UnitLit(next) => node("unit") :: ctrl_edge(next) :: recur(next)
+      case IntLit(int, next) => node(int.toString) :: ctrl_edge(next) :: recur(next)
+      case BoolLit(bool, next) => node(bool.toString) :: ctrl_edge(next) :: recur(next)
+      case FunLit(fun, next) => node(s"function[${funIds(fun())}]") :: ctrl_edge(next) :: recur(next)
+      case AddInt(addInts, subInts, next) => node("+") :: ctrl_edge(next) :: (recur(next) ::: addInts.map(data_edge) ::: subInts.map(data_edge_label("Negate")))
+      case AndInt(ints, next) => node("&") :: ctrl_edge(next) :: (recur(next) ::: ints.map(data_edge))
+      case OrInt(ints, next) => node("|") :: ctrl_edge(next) :: (recur(next) ::: ints.map(data_edge))
+      case XorInt(ints, next) => node("^") :: ctrl_edge(next) :: (recur(next) ::: ints.map(data_edge))
+      case MultInt(ints, next) => node("*") :: ctrl_edge(next) :: (recur(next) ::: ints.map(data_edge))
+      case DivInt(dividend, divisor, next) => node("/") :: ctrl_edge(next) :: data_edge_label("Dividend")(dividend) :: data_edge_label("Divisor")(divisor) :: recur(next)
+      case ModInt(dividend, divisor, next) => node("%") :: ctrl_edge(next) :: data_edge_label("Dividend")(dividend) :: data_edge_label("Divisor")(divisor) :: recur(next)
+      case Branch(condition, ifTrue, ifFalse) => node("branch") :: data_edge(condition) :: ctrl_edge(ifTrue) :: ctrl_edge_sec(ifFalse) :: (recur(ifTrue) ::: recur(ifFalse))
+      case Phi(branch, ifTrue, ifFalse, next) => node("phi") :: phi_edge(branch) :: data_edge(ifTrue) :: data_edge_sec(ifFalse) :: recur(next)
+      case TupleIdx(tuple, idx, next) => node(s"tuple[$idx]") :: data_edge(tuple) :: recur(next)
       case ReadRef(ref, next) => ???
       case WriteRef(ref, data, next) => ???
       case ReadLocal(local, next) => ???
       case WriteLocal(local, data, next) => ???
       case RefLocal(local, next) => ???
-      case ReadGlobal(global, idx, next) => node(s"global $global[$idx]") :: ctrl_edge(next) :: next.op.format(formatted)
+      case ReadGlobal(global, idx, next) => node(s"global[${varIds(global())}][$idx]") :: ctrl_edge(next) :: recur(next)
       case WriteGlobal(global, idx, data, next) => ???
       case RefGlobal(global, idx, next) => ???
-      case Call(fn, values, next) => ???
-      case CallInd(fn, values, next) => node("invoke") :: ctrl_edge(next) :: data_edge_sec(fn) :: (next.op.format(formatted) ::: values.map(data_edge))
+      case Call(fun, values, next) => ???
+      case CallInd(fun, values, next) => node("invoke") :: ctrl_edge(next) :: data_edge_sec(fun) :: (recur(next) ::: values.map(data_edge))
       case Ret(returnValues) => node("return") :: returnValues.map(data_edge)
     }
   } else List.empty
@@ -100,7 +105,7 @@ abstract class Op {
 case class UnitLit(next: Controlflow) extends Op
 case class IntLit(int: Long, next: Controlflow) extends Op
 case class BoolLit(bool: Boolean, next: Controlflow) extends Op
-case class FunLit(fn: Int, next: Controlflow) extends Op
+case class FunLit(fun: () => Fun, next: Controlflow) extends Op
 case class AddInt(addInts: List[Dataflow], subInts: List[Dataflow], next: Controlflow) extends Op
 case class AndInt(ints: List[Dataflow], next: Controlflow) extends Op
 case class OrInt(ints: List[Dataflow], next: Controlflow) extends Op
@@ -116,53 +121,45 @@ case class WriteRef(ref: Dataflow, data: Dataflow, next: Controlflow) extends Op
 case class ReadLocal(local: Int, next: Controlflow) extends Op
 case class WriteLocal(local: Int, data: Dataflow, next: Controlflow) extends Op
 case class RefLocal(local: Int, next: Controlflow) extends Op
-case class ReadGlobal(global: Int, idx: Int, next: Controlflow) extends Op
-case class WriteGlobal(global: Int, idx: Int, data: Dataflow, next: Controlflow) extends Op
-case class RefGlobal(global: Int, idx: Int, next: Controlflow) extends Op
-case class Call(fn: Int, values: List[Dataflow], next: Controlflow) extends Op
-case class CallInd(fn: Dataflow, values: List[Dataflow], next: Controlflow) extends Op
+case class ReadGlobal(global: () => Var, idx: Int, next: Controlflow) extends Op
+case class WriteGlobal(global: () => Var, idx: Int, data: Dataflow, next: Controlflow) extends Op
+case class RefGlobal(global: () => Var, idx: Int, next: Controlflow) extends Op
+case class Call(fun: () => Fun, values: List[Dataflow], next: Controlflow) extends Op
+case class CallInd(fun: Dataflow, values: List[Dataflow], next: Controlflow) extends Op
 case class Ret(returnValues: List[Dataflow]) extends Op
 
 abstract class Fun {
+  def signature: FunDatatype
 
+  def formatParams(funIndex: Int): List[String] = Range(0, signature.params.length).toList.flatMap { index =>
+    List(s"Par_${funIndex}_$index [shape = diamond, label = \"parameter[$index]\"]", s"Fun_$funIndex -> Par_${funIndex}_$index [color = green]")
+  }
+
+  def format(index: Int, funIds: Map[Fun, Int], varIds: Map[Var, Int]): String
 }
 
-case class CodeFun(entry: Controlflow, signature: FunDatatype, localVars: List[Datatype]) extends Fun {
-  def format(): String = s"digraph {${entry.op.format(mutable.Set()).map(" " * 8 + _).mkString("\n", "\n", "\n")}}"
+class CodeFun(val entry: Controlflow, val signature: FunDatatype, val localVars: List[Datatype]) extends Fun {
+  def format(index: Int, funIds: Map[Fun, Int], varIds: Map[Var, Int]): String = graph(s"Fun_$index [shape = box, label = \"function[$index]\"]" :: s"Fun_$index -> Op_${entry.op.id} [color = orange]" :: formatParams(index) ::: entry.op.format(mutable.Set(), index, funIds, varIds))
 }
 
-case class AsmFun() extends Fun {
-
+class AsmFun(val instr: List[gen.Instr], val signature: FunDatatype) extends Fun {
+  def format(index: Int, funIds: Map[Fun, Int], varIds: Map[Var, Int]): String = graph(List(s"Fun_$index [shape = box, label = \"function[$index]\"]"))
 }
 
-case class WindowsFun(name: String) extends Fun {
-
+class Var(val entry: Controlflow, val datatypes: Array[Datatype], val localVars: List[Datatype]) {
+  def format(index: Int, funIds: Map[Fun, Int], varIds: Map[Var, Int]): String = graph(s"Var_$index [shape = diamond, label = \"global[$index]\"]" :: s"Var_$index -> Op_${entry.op.id} [color = orange]" :: entry.op.format(mutable.Set(), 0, funIds, varIds))
 }
 
-case class Var(entry: Controlflow, datatypes: Array[Datatype])
+case class BssElement(size: Int, align: Int)
+case class ConstElement(strings: List[String], size: Int, align: Int)
+case class DataElement(strings: List[String], size: Int, align: Int)
 
-case class OptUnit(fns: Array[Fun], vars: Array[Var])
+case class StaticData(bss: Map[String, BssElement], const: Map[String, ConstElement], data: Map[String, DataElement], windowsFunctions: List[String])
 
-def fn: Fun = {
-  lazy val int1: IntLit = IntLit(3, int2ctrl)
-  lazy val int2: IntLit = IntLit(5, addctrl)
-  lazy val add: AddInt = AddInt(List(int1data, int2data), List.empty, int3ctrl)
-  lazy val int3: IntLit = IntLit(8, multctrl)
-  lazy val mult: MultInt = MultInt(List(int3data, adddata), retctrl)
-  lazy val ret: Ret = Ret(List(multdata))
-
-  lazy val int1ctrl: Controlflow = Controlflow(() => int1)
-  lazy val int2ctrl: Controlflow = Controlflow(() => int2)
-  lazy val addctrl: Controlflow = Controlflow(() => add)
-  lazy val int3ctrl: Controlflow = Controlflow(() => int3)
-  lazy val multctrl: Controlflow = Controlflow(() => mult)
-  lazy val retctrl: Controlflow = Controlflow(() => ret)
-
-  lazy val int1data: Dataflow = Dataflow(() => Some(int1))
-  lazy val int2data: Dataflow = Dataflow(() => Some(int2))
-  lazy val adddata: Dataflow = Dataflow(() => Some(add))
-  lazy val int3data: Dataflow = Dataflow(() => Some(int3))
-  lazy val multdata: Dataflow = Dataflow(() => Some(mult))
-
-  CodeFun(int1ctrl, FunDatatype(List.empty, List.empty), List.empty)
+class OptUnit(val funs: List[Fun], val vars: List[Var], val staticData: StaticData) {
+  def format(): String = {
+    val funIds: Map[Fun, Int] = funs.zipWithIndex.toMap
+    val varIds: Map[Var, Int] = vars.zipWithIndex.toMap
+    (funs.zipWithIndex.map {case (f, index) => f.format(index, funIds, varIds)} ::: vars.zipWithIndex.map {case (v, index) => v.format(index, funIds, varIds)}).mkString("digraph {\n", "\n", "\n}")
+  }
 }
