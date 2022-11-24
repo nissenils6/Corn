@@ -7,7 +7,7 @@ import syn.{GlobalStmt, ParserState, parseFile}
 import java.io.PrintWriter
 import scala.languageFeature.implicitConversions
 
-private val ON_DEKSTOP = true
+private val ON_DEKSTOP = false
 
 private val PATH = if ON_DEKSTOP then "C:/Users/nisse/OneDrive/Skrivbord/Corn/TestCode" else "C:/Users/nisse/Desktop/Corn/TestCode"
 
@@ -29,10 +29,10 @@ def time[T](name: String, expr: => T): T = {
   val tokens = time("Lexical Analysis", tokenize(file))
   val parsedFile = time("Syntax Analysis", parseFile(tokens, file))
   val module = time("Semantic Analysis", analyzeFile(parsedFile, file))
-//  new PrintWriter(ASSEMBLY_PATH) {
-//    write(AsmGen.toString)
-//    close()
-//  }
+  new PrintWriter(ASSEMBLY_PATH) {
+    write(AsmGen.toString)
+    close()
+  }
 
   val optUnit = module.generateIr()
 

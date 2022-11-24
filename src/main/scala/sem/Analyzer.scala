@@ -184,35 +184,35 @@ def analyzeFile(stmts: List[syn.GlobalStmt], file: File): Module = {
 
   module.varInits.foreach(_.typeCheck())
 
-//  val secondaryStack = AsmGen.bss(1024 * 256, 16)
-//
-//  val ctx = new ExprCodeGenContext()
-//
-//  def iterateUserGlobalVars(pattern: Pattern[UserGlobalVar], offset: Int): Unit = pattern match {
-//    case VarPattern(patternVar, _) => patternVar.datatype.generateCopyCode(ctx, Address(patternVar.label.get), Reg.RBP + offset)
-//    case TuplePattern(elements, _) => elements.zip(Datatype.alignSequence(elements.map(_.datatype))._3.map(_ + offset)).foreach(iterateUserGlobalVars.tupled)
-//  }
-//
-//  for {
-//    varInit <- module.varInits
-//    if varInit.analyzedExpr.returnType.runtime
-//  } {
-//    ctx.secondaryOffset = 0
-//    varInit.analyzedExpr.generateCode(ctx)
-//    iterateUserGlobalVars(varInit.analyzedPattern, 0)
-//  }
-//
-//  val initFunction = AsmGen.functionLabel()
-//  AsmGen.function(initFunction, ctx.code ::: List(Ret()))
-//
-//  AsmGen.main(
-//    Lea(Reg.RBP, Address(secondaryStack)),
-//    DirCall(initFunction),
-//    DirCall(module.vars("main").head.constVal.get.asInstanceOf[ConstFunction].function.label),
-//    Sub(Reg.RSP, 56),
-//    Xor(Reg.RCX, Reg.RCX),
-//    IndCall(Address(AsmGen.windowsFunction("ExitProcess")))
-//  )
+  val secondaryStack = AsmGen.bss(1024 * 256, 16)
+
+  val ctx = new ExprCodeGenContext()
+
+  def iterateUserGlobalVars(pattern: Pattern[UserGlobalVar], offset: Int): Unit = pattern match {
+    case VarPattern(patternVar, _) => patternVar.datatype.generateCopyCode(ctx, Address(patternVar.label.get), Reg.RBP + offset)
+    case TuplePattern(elements, _) => elements.zip(Datatype.alignSequence(elements.map(_.datatype))._3.map(_ + offset)).foreach(iterateUserGlobalVars.tupled)
+  }
+
+  for {
+    varInit <- module.varInits
+    if varInit.analyzedExpr.returnType.runtime
+  } {
+    ctx.secondaryOffset = 0
+    varInit.analyzedExpr.generateCode(ctx)
+    iterateUserGlobalVars(varInit.analyzedPattern, 0)
+  }
+
+  val initFunction = AsmGen.functionLabel()
+  AsmGen.function(initFunction, ctx.code ::: List(Ret()))
+
+  AsmGen.main(
+    Lea(Reg.RBP, Address(secondaryStack)),
+    DirCall(initFunction),
+    DirCall(module.vars("main").head.constVal.get.asInstanceOf[ConstFunction].function.label),
+    Sub(Reg.RSP, 56),
+    Xor(Reg.RCX, Reg.RCX),
+    IndCall(Address(AsmGen.windowsFunction("ExitProcess")))
+  )
 
   module
 }
