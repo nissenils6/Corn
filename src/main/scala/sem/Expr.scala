@@ -62,7 +62,7 @@ abstract class Expr() {
     case CallExpr(function, args, _, _) => function.gatherLocals ::: args.flatMap(_.gatherLocals)
     case ValExpr(expr, _, _) => expr.gatherLocals
     case TupleExpr(elements, _, _) => elements.flatMap(_.gatherLocals)
-    case BlockExpr(exprs, lastExpr, _, _, _) => lastExpr.gatherLocals ::: exprs.flatMap(_.gatherLocals)
+    case BlockExpr(exprs, lastExpr, vars, _, _) => vars ::: lastExpr.gatherLocals ::: exprs.flatMap(_.gatherLocals)
     case LetExpr(_, expr, _, _) => expr.gatherLocals
     case AssignExpr(left, right, _, _) => left.gatherLocals ::: right.gatherLocals
     case IfExpr(condition, ifBlock, elseBlock, _, _) => condition.gatherLocals ::: ifBlock.gatherLocals ::: elseBlock.gatherLocals
@@ -367,12 +367,16 @@ abstract class Expr() {
       (callData, fnExprCtrl)
     case GlobalVarExpr(globalVar, _, _) =>
       lazy val (optVar: opt.Var, index: Int) = context(globalVar)
-      lazy val intOp: opt.Op = opt.ReadGlobal(() => optVar, index, nextCtrl)
-      lazy val intData: opt.Dataflow = opt.Dataflow(() => Some(intOp))
-      lazy val intCtrl: opt.Controlflow = opt.Controlflow(() => intOp)
-      (intData, intCtrl)
+      lazy val globalOp: opt.Op = opt.ReadGlobal(() => optVar, index, nextCtrl)
+      lazy val globalData: opt.Dataflow = opt.Dataflow(() => Some(globalOp))
+      lazy val globalCtrl: opt.Controlflow = opt.Controlflow(() => globalOp)
+      (globalData, globalCtrl)
     case RefGlobalVarExpr(globalVar, _, _) => ???
-    case LocalVarExpr(localVar, _, _) => ???
+    case LocalVarExpr(localVar, _, _) =>
+      lazy val localOp: opt.Op = opt.ReadLocal(localVars(localVar), nextCtrl)
+      lazy val localData: opt.Dataflow = opt.Dataflow(() => Some(localOp))
+      lazy val localCtrl: opt.Controlflow = opt.Controlflow(() => localOp)
+      (localData, localCtrl)
     case RefLocalVarExpr(localVar, _, _) => ???
     case ValExpr(expr, _, _) => ???
     case IntExpr(int, _, _) =>
@@ -396,7 +400,11 @@ abstract class Expr() {
       lazy val unitCtrl: opt.Controlflow = opt.Controlflow(() => unitOp)
       (unitData, unitCtrl)
     case LetExpr(pattern, expr, _, _) =>
-      lazy val (exprData: opt.Dataflow, exprCtrl: opt.Controlflow) = expr.generateIr(patternCtrl, context, localVars)
+      lazy val (exprData: opt.Dataflow, exprCtrl: opt.Controlflow) = expr.generateIr(unitCtrl, context, localVars)
+
+      lazy val unitOp: opt.Op = opt.UnitLit(patternCtrl)
+      lazy val unitCtrl: opt.Controlflow = opt.Controlflow(() => unitOp)
+
       lazy val patternCtrl: opt.Controlflow = Pattern.generateIrLocal(pattern, exprData, nextCtrl, localVars)
       (exprData, exprCtrl)
     case AssignExpr(left, right, _, _) => ???

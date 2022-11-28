@@ -31,7 +31,7 @@ abstract class Datatype {
     case IntDatatype(_) => opt.IntDatatype
     case BoolDatatype(_) => opt.BoolDatatype
     case TypeDatatype(_) => ???
-    case RefDatatype(_, _) => ???
+    case RefDatatype(datatype, _) => opt.RefDatatype(datatype.optDatatype)
     case TupleDatatype(elements, _) => opt.TupleDatatype(elements.map(_.optDatatype))
     case FunDatatype(params, returnType, _) => opt.FunDatatype(params.map(_.optDatatype), List(returnType.optDatatype))
   }

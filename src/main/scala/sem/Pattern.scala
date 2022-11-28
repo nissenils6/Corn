@@ -58,23 +58,23 @@ object Pattern {
     verifiedVars.toMap
   }
   
-  private def generateIr[V <: Var](pattern: Pattern[V], expr: opt.Dataflow, nextCtrl: opt.Controlflow, makeWriteOp: (V, opt.Dataflow, opt.Controlflow) => opt.Op): opt.Controlflow = pattern match {
+  def generateIrLocal(pattern: Pattern[LocalVar], expr: opt.Dataflow, nextCtrl: opt.Controlflow, localVars: Map[LocalVar, Int]): opt.Controlflow = pattern match {
     case VarPattern(patternVar, _) =>
-      lazy val writeOp: opt.Op = makeWriteOp(patternVar, expr, nextCtrl)
+      lazy val writeOp: opt.Op = opt.WriteLocal(localVars(patternVar), expr, nextCtrl)
       lazy val writeCtrl: opt.Controlflow = opt.Controlflow(() => writeOp)
       writeCtrl
     case TuplePattern(elements, _) =>
       elements.zipWithIndex.foldRight(nextCtrl)((tuple, ctrl) => {
         val (subPattern, index) = tuple
         lazy val idxOp: opt.TupleIdx = opt.TupleIdx(expr, index, patternCtrl)
-        lazy val patternCtrl: opt.Controlflow = generateIr(subPattern, idxData, ctrl, makeWriteOp)
+        lazy val patternCtrl: opt.Controlflow = generateIrLocal(subPattern, idxData, ctrl, localVars)
         lazy val idxCtrl: opt.Controlflow = opt.Controlflow(() => idxOp)
         lazy val idxData: opt.Dataflow = opt.Dataflow(() => Some(idxOp))
         idxCtrl
       })
   }
 
-  def generateIrLocal(pattern: Pattern[LocalVar], expr: opt.Dataflow, nextCtrl: opt.Controlflow, localVars: Map[LocalVar, Int]): opt.Controlflow = generateIr(pattern, expr, nextCtrl, (patternVar, expr, nextCtrl) => opt.WriteLocal(localVars(patternVar), expr, nextCtrl))
+//  def generateIrLocal(pattern: Pattern[LocalVar], expr: opt.Dataflow, nextCtrl: opt.Controlflow, ): opt.Controlflow = generateIr(pattern, expr, nextCtrl, (patternVar, expr, nextCtrl) => opt.WriteLocal(localVars(patternVar), expr, nextCtrl))
   
   // def generateIrGlobal(pattern: Pattern[UserGlobalVar], expr: opt.Dataflow, nextCtrl: opt.Controlflow, globalVars: Map[GlobalVar, Int]): opt.Controlflow = generateIr(pattern, expr, nextCtrl, (patternVar, expr, nextCtrl) => opt.WriteGlobal(globalVars(patternVar), expr, nextCtrl))
   

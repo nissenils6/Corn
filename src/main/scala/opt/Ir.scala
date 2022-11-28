@@ -12,6 +12,7 @@ abstract class Datatype {
 case object UnitDatatype extends Datatype
 case object IntDatatype extends Datatype
 case object BoolDatatype extends Datatype
+case class RefDatatype(datatype: Datatype) extends Datatype
 case class TupleDatatype(elements: List[Datatype]) extends Datatype
 case class FunDatatype(params: List[Datatype], returnTypes: List[Datatype]) extends Datatype
 
@@ -87,15 +88,15 @@ abstract class Op {
       case Branch(condition, ifTrue, ifFalse) => node("branch") :: data_edge(condition) :: ctrl_edge(ifTrue) :: ctrl_edge_sec(ifFalse) :: (recur(ifTrue) ::: recur(ifFalse))
       case Phi(branch, ifTrue, ifFalse, next) => node("phi") :: phi_edge(branch) :: data_edge(ifTrue) :: data_edge_sec(ifFalse) :: recur(next)
       case TupleIdx(tuple, idx, next) => node(s"tuple[$idx]") :: data_edge(tuple) :: recur(next)
-      case ReadRef(ref, next) => ???
-      case WriteRef(ref, data, next) => ???
-      case ReadLocal(local, next) => ???
-      case WriteLocal(local, data, next) => ???
-      case RefLocal(local, next) => ???
+      case ReadRef(ref, next) => node(s"ref") :: data_edge(ref) :: ctrl_edge(next) :: recur(next)
+      case WriteRef(ref, data, next) => node(s"ref = ") :: data_edge(ref) :: data_edge_sec(data) :: ctrl_edge(next) :: recur(next)
+      case ReadLocal(local, next) => node(s"local[$local]") :: ctrl_edge(next) :: recur(next)
+      case WriteLocal(local, data, next) => node(s"local[$local] = ") :: data_edge(data) :: ctrl_edge(next) :: recur(next)
+      case RefLocal(local, next) => node(s"ref local[$local]") :: ctrl_edge(next) :: recur(next)
       case ReadGlobal(global, idx, next) => node(s"global[${varIds(global())}][$idx]") :: ctrl_edge(next) :: recur(next)
-      case WriteGlobal(global, idx, data, next) => ???
-      case RefGlobal(global, idx, next) => ???
-      case Call(fun, values, next) => ???
+      case WriteGlobal(global, idx, data, next) => node(s"global[${varIds(global())}][$idx] = ") :: data_edge(data) :: ctrl_edge(next) :: recur(next)
+      case RefGlobal(global, idx, next) => node(s"ref global[${varIds(global())}][$idx]") :: ctrl_edge(next) :: recur(next)
+      case Call(fun, values, next) => node(s"invoke[${funIds(fun())}]") :: ctrl_edge(next) :: (recur(next) ::: values.map(data_edge))
       case CallInd(fun, values, next) => node("invoke") :: ctrl_edge(next) :: data_edge_sec(fun) :: (recur(next) ::: values.map(data_edge))
       case Ret(returnValues) => node("return") :: returnValues.map(data_edge)
     }
