@@ -371,14 +371,29 @@ abstract class Expr() {
       lazy val globalData: opt.Dataflow = opt.Dataflow(() => Some(globalOp))
       lazy val globalCtrl: opt.Controlflow = opt.Controlflow(() => globalOp)
       (globalData, globalCtrl)
-    case RefGlobalVarExpr(globalVar, _, _) => ???
+    case RefGlobalVarExpr(globalVar, _, _) =>
+      lazy val (optVar: opt.Var, index: Int) = context(globalVar)
+      lazy val globalOp: opt.Op = opt.RefGlobal(() => optVar, index, nextCtrl)
+      lazy val globalData: opt.Dataflow = opt.Dataflow(() => Some(globalOp))
+      lazy val globalCtrl: opt.Controlflow = opt.Controlflow(() => globalOp)
+      (globalData, globalCtrl)
     case LocalVarExpr(localVar, _, _) =>
       lazy val localOp: opt.Op = opt.ReadLocal(localVars(localVar), nextCtrl)
       lazy val localData: opt.Dataflow = opt.Dataflow(() => Some(localOp))
       lazy val localCtrl: opt.Controlflow = opt.Controlflow(() => localOp)
       (localData, localCtrl)
-    case RefLocalVarExpr(localVar, _, _) => ???
-    case ValExpr(expr, _, _) => ???
+    case RefLocalVarExpr(localVar, _, _) =>
+      lazy val localOp: opt.Op = opt.RefLocal(localVars(localVar), nextCtrl)
+      lazy val localData: opt.Dataflow = opt.Dataflow(() => Some(localOp))
+      lazy val localCtrl: opt.Controlflow = opt.Controlflow(() => localOp)
+      (localData, localCtrl)
+    case ValExpr(expr, _, _) =>
+      lazy val (exprData: opt.Dataflow, exprCtrl: opt.Controlflow) = expr.generateIr(refCtrl, context, localVars)
+
+      lazy val refOp: opt.Op = opt.ReadRef(exprData, nextCtrl)
+      lazy val refData: opt.Dataflow = opt.Dataflow(() => Some(refOp))
+      lazy val refCtrl: opt.Controlflow = opt.Controlflow(() => refOp)
+      (refData, exprCtrl)
     case IntExpr(int, _, _) =>
       lazy val intOp: opt.Op = opt.IntLit(int, nextCtrl)
       lazy val intData: opt.Dataflow = opt.Dataflow(() => Some(intOp))
@@ -413,10 +428,8 @@ abstract class Expr() {
       lazy val funData: opt.Dataflow = opt.Dataflow(() => Some(funOp))
       lazy val funCtrl: opt.Controlflow = opt.Controlflow(() => funOp)
       (funData, funCtrl)
-    case FunTypeExpr(parameters, returnType, _, _) => ???
-    case RefTypeExpr(expr, _, _) => ???
     case IfExpr(condition, ifBlock, elseBlock, _, _) => ???
-    case MutExpr(expr, mutable, _, _) => ???
+    case expr: Expr => throw Error(Error.INTERNAL, expr.range.file, List(ErrorComponent(expr.range, Some(s"Attempt to generate ir from compile time expression (this is bug in the semantic analyzer)"))))
   }
 
   def format(indentation: Int): String = this match {
