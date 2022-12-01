@@ -1,4 +1,4 @@
-import core.{Error, ErrorGroup, File, FilePosRange}
+import core.{Error, ErrorComponent, ErrorGroup, File, FilePosRange}
 import gen.AsmGen
 import lex.{LexerState, tokenize}
 import sem.analyzeFile
@@ -6,43 +6,137 @@ import syn.{GlobalStmt, ParserState, parseFile}
 
 import java.io.PrintWriter
 import scala.languageFeature.implicitConversions
-
-private val ON_DEKSTOP = true
-
-private val PATH = if ON_DEKSTOP then "C:/Users/nisse/OneDrive/Skrivbord/Corn/TestCode" else "C:/Users/nisse/Desktop/Corn/TestCode"
-
-private val SOURCE_PATH = PATH + ".txt"
-private val ASSEMBLY_PATH = PATH + ".asm"
-private val DOT_PATH = PATH + ".dot.txt"
-
-def time[T](name: String, expr: => T): T = {
-  val start = System.nanoTime
-  val value = expr
-  println(f"Time to perform '$name': ${Math.round((System.nanoTime - start) / 1e5) / 1e1} ms")
-  value
-}
+import scala.sys.process.{Process, ProcessLogger}
 
 // optimization, while loops, heap allocation, closures, partial application, structs, unions, generics, builtin datatypes, io, for comprehensions, match expressions
 
-@main def main(): Unit = try {
-  val file = File(SOURCE_PATH)
-  val tokens = time("Lexical Analysis", tokenize(file))
-  val parsedFile = time("Syntax Analysis", parseFile(tokens, file))
-  val module = time("Semantic Analysis", analyzeFile(parsedFile, file))
-  new PrintWriter(ASSEMBLY_PATH) {
-    write(AsmGen.toString)
-    close()
+val help: String =
+  """Usage: corn [options]
+
+Options:
+-file <FILE>  Path to the file to be compiled
+              A ".asm" file will be generated and then compiled to a ".exe" file
+-help         Prints this command usage description to standard output
+-comp_info    Prints information about the compilation process to standard output
+-run          Runs the program after it has been compiled and assembled
+-tokens       Prints all generated tokens from the Lexical Analysis to a ".tokens.txt" file
+-ast          Prints the entire generated abstract syntax tree from the Syntax Analysis to a ".ast.txt" file
+-dec_ast      Prints the entire generated decorated abstract syntax tree from the Semantic Analysis to a ".dec_ast.txt" file
+-opt_graph    Prints the graph of intermediate representation used during optimization to a ".opt_graph.txt" file and compiles it to a ".opt_graph.svg" file
+
+All generated files are named after the input file name, but have different suffixes.""".replace("\r\n", "\n")
+
+def time[T](expr: => T): (T, Long) = {
+  val start = System.nanoTime
+  val value = expr
+  (value, System.nanoTime - start)
+}
+
+def formatTime(nanos: Long): String = s"${Math.round(nanos / 1e5) / 10} ms"
+
+def window(title: String, inset: Int, string: String): String = {
+  val lines = string.split('\n')
+  val width = lines.map(_.length).max
+  val totalWidth = width + (inset * 2)
+  val topWidth = totalWidth - title.length
+
+  val topLineLeft = "-" * ((topWidth - (topWidth / 2)) - 1)
+  val topLineRight = "-" * ((topWidth / 2) - 1)
+
+  val topLine = s"+$topLineLeft $title $topLineRight+\n"
+  val padLine = "|" + " " * totalWidth + "|\n"
+  val contentLines = lines.map(_.padTo(width, ' ')).map("|" + " " * inset + _ + " " * inset + "|\n")
+  "\n" + topLine + padLine * inset + contentLines.mkString + padLine * inset + topLine
+}
+
+def printFile(path: String, content: String): Unit = new PrintWriter(path) {
+  write(content)
+  close()
+}
+
+case class ParsedArgs(filePath: Option[String] = None, options: Int = 0) {
+  def enabled(option: Int): Boolean = (options & option) > 0
+}
+
+object ParsedArgs {
+  val HELP = 0x01
+  val COMP_INFO = 0x02
+  val RUN = 0x04
+  val TOKENS = 0x08
+  val AST = 0x10
+  val DEC_AST = 0x20
+  val OPT_GRAPH = 0x40
+
+  val OPTIONS: Map[String, Int] = Map("-help" -> HELP, "-comp_info" -> COMP_INFO, "-run" -> RUN, "-tokens" -> TOKENS, "-ast" -> AST, "-dec_ast" -> DEC_AST, "-opt_graph" -> OPT_GRAPH)
+}
+
+def parseArgs(args: List[(FilePosRange, String)], parsedArgs: ParsedArgs): ParsedArgs = args match {
+  case List() => parsedArgs
+  case (_, "-file") :: (_, filePath) :: rest => parseArgs(rest, ParsedArgs(Some(filePath), parsedArgs.options))
+  case (range, "-file") :: _ => throw Error.cmdLine(s"Unexpected end of line when parsing input file", range.file.lastRange)
+  case (_, option) :: rest if ParsedArgs.OPTIONS.contains(option) => parseArgs(rest, ParsedArgs(parsedArgs.filePath, parsedArgs.options | ParsedArgs.OPTIONS(option)))
+  case (range, cmd) :: _ => throw Error.cmdLine(s"Invalid command '$cmd'", range)
+}
+
+@main def main(args: String*): Unit = try {
+  val cmdFile = File("Command Line", args.map {
+    case arg if arg.contains(' ') => s"'$arg'"
+    case arg => arg
+  }.mkString(" "))
+
+  val cmdArgs = args.foldLeft((0, List[(FilePosRange, String)]())) {
+    case ((pos, accArgs), arg) if arg.contains(' ') => (pos + arg.length + 3, (FilePosRange(pos + 1, pos + arg.length + 2, cmdFile), arg) :: accArgs)
+    case ((pos, accArgs), arg) => (pos + arg.length + 1, (FilePosRange(pos, pos + arg.length, cmdFile), arg) :: accArgs)
+  }._2.reverse
+
+  val parsedArgs = parseArgs(cmdArgs, ParsedArgs())
+
+  if (parsedArgs.enabled(ParsedArgs.HELP)) {
+    println(window("HELP", 1, help))
   }
 
-  val optUnit = module.generateIr()
+  for {
+    filePath <- parsedArgs.filePath
+    file = File(filePath)
+    (tokens, lexTime) = time(tokenize(file))
+    (parsedFile, parseTime) = time(parseFile(tokens, file))
+    (module, semTime) = time(analyzeFile(parsedFile, file))
+    (optUnit, irTime) = time(module.generateIr())
+  } {
+    if (parsedArgs.enabled(ParsedArgs.COMP_INFO)) println(window("COMPILATION INFO", 1, List(
+      s"Lexical Analyser runtime:                      ${formatTime(lexTime)}",
+      s"Syntax Analyser runtime:                       ${formatTime(parseTime)}",
+      s"Semantic Analyser runtime:                     ${formatTime(semTime)}",
+      s"Intermediate Representation Generator runtime: ${formatTime(irTime)}"
+    ).mkString("\n")))
 
-  println(optUnit.format())
+    if (parsedArgs.enabled(ParsedArgs.TOKENS)) {
+      printFile(filePath + ".tokens.txt", tokens.mkString(" "))
+    }
 
-  println()
-  println(List(tokens.mkString(" "), parsedFile.mkString("\n\n"), module.format(0)).mkString("-" * 128 + "\n\n", "\n\n" + "-" * 128 + "\n\n", "\n\n" + "-" * 128))
+    if (parsedArgs.enabled(ParsedArgs.AST)) {
+      printFile(filePath + ".ast.txt", parsedFile.mkString("\n\n"))
+    }
+
+    if (parsedArgs.enabled(ParsedArgs.DEC_AST)) {
+      printFile(filePath + ".dec_ast.txt", module.format(0))
+    }
+
+    if (parsedArgs.enabled(ParsedArgs.OPT_GRAPH)) {
+      printFile(filePath + ".opt_graph.txt", optUnit.format())
+      Process(s"dot -Tsvg $filePath.opt_graph.txt -o $filePath.opt_graph.svg").!(ProcessLogger(_ => ()))
+    }
+
+    printFile(filePath + ".asm", AsmGen.toString)
+    Process(s"fasm $filePath.asm $filePath.exe").!(ProcessLogger(_ => ()))
+
+    if (parsedArgs.enabled(ParsedArgs.RUN)) {
+      Process(filePath).!
+    }
+  }
 } catch {
   case error: (Error | ErrorGroup) =>
     error.printStackTrace()
-    print("\n" * 8)
-    print(error)
+    print("\n" * 4)
+    print(window("COMPILER ERROR", 1, error.toString))
 }

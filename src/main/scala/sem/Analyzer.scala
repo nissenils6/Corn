@@ -6,9 +6,10 @@ import opt.{CodeFun, Controlflow, Dataflow}
 
 import scala.collection.mutable
 
-type GraphOp = (opt.Dataflow, opt.Dataflow, opt.Controlflow) => opt.Op
+type BinGraphOp = (opt.Dataflow, opt.Dataflow, opt.Controlflow) => opt.Op
+type CompGraphOp = (opt.Dataflow, opt.Controlflow) => opt.Op
 
-def binaryOperatorGraph(graphOp: GraphOp, params: List[opt.Datatype], returnType: opt.Datatype): Option[opt.Fun] = {
+def binaryOperatorGraph(graphOp: BinGraphOp, params: List[opt.Datatype], returnType: opt.Datatype): Option[opt.Fun] = {
   lazy val op: opt.Op = graphOp(opt.Dataflow(() => None), opt.Dataflow(() => None, 1), retCtrl)
   lazy val opCtrl: opt.Controlflow = opt.Controlflow(() => op)
   lazy val opData: opt.Dataflow = opt.Dataflow(() => Some(op))
@@ -18,7 +19,21 @@ def binaryOperatorGraph(graphOp: GraphOp, params: List[opt.Datatype], returnType
   Some(new CodeFun(opCtrl, opt.FunDatatype(params, List(returnType)), List()))
 }
 
-def simpleOperator(module: => Module, name: String, compileTimeFunction: (Long, Long) => Long, asmOperation: (Address, Reg) => SimpleOpMem, graphOp: GraphOp): BuiltinGlobalVar =
+def compOperatorGraph(graphOp: CompGraphOp, swapped: Boolean, params: List[opt.Datatype], returnType: opt.Datatype): Option[opt.Fun] = {
+  lazy val subOp: opt.Op = opt.AddInt(List(opt.Dataflow(() => None, if swapped then 1 else 0)), List(opt.Dataflow(() => None, if swapped then 0 else 1)), opCtrl)
+  lazy val subOpCtrl: opt.Controlflow = opt.Controlflow(() => subOp)
+  lazy val subOpData: opt.Dataflow = opt.Dataflow(() => Some(subOp))
+
+  lazy val op: opt.Op = graphOp(subOpData, retCtrl)
+  lazy val opCtrl: opt.Controlflow = opt.Controlflow(() => op)
+  lazy val opData: opt.Dataflow = opt.Dataflow(() => Some(op))
+
+  lazy val retOp: opt.Op = opt.Ret(List(opData))
+  lazy val retCtrl: opt.Controlflow = opt.Controlflow(() => retOp)
+  Some(new CodeFun(subOpCtrl, opt.FunDatatype(params, List(returnType)), List()))
+}
+
+def simpleOperator(module: => Module, name: String, compileTimeFunction: (Long, Long) => Long, asmOperation: (Address, Reg) => SimpleOpMem, graphOp: BinGraphOp): BuiltinGlobalVar =
   new BuiltinGlobalVar(module, name, ConstFunction(new BuiltinFun(module, List(IntDatatype(false), IntDatatype(false)), IntDatatype(false),
     Some(args => ConstInt(compileTimeFunction(args.head.toInt, args(1).toInt))),
     () => List(
@@ -58,7 +73,7 @@ def mulOperator(module: => Module): BuiltinGlobalVar =
     }
   )))
 
-def divOperator(module: => Module, name: String, compileTimeFunction: (Long, Long) => Long, resultReg: Reg, graphOp: GraphOp): BuiltinGlobalVar =
+def divOperator(module: => Module, name: String, compileTimeFunction: (Long, Long) => Long, resultReg: Reg, graphOp: BinGraphOp): BuiltinGlobalVar =
   new BuiltinGlobalVar(module, name, ConstFunction(new BuiltinFun(module, List(IntDatatype(false), IntDatatype(false)), IntDatatype(false),
     Some(args => ConstInt(compileTimeFunction(args.head.toInt, args(1).toInt))),
     () => List(
@@ -82,7 +97,7 @@ def divOperator(module: => Module, name: String, compileTimeFunction: (Long, Lon
     }
   )))
 
-def comparisonOperator(module: => Module, name: String, compileTimeFunction: (Long, Long) => Boolean, flag: Flag, graphOp: GraphOp): BuiltinGlobalVar =
+def comparisonOperator(module: => Module, name: String, compileTimeFunction: (Long, Long) => Boolean, flag: Flag, swapped: Boolean, graphOp: CompGraphOp): BuiltinGlobalVar =
   new BuiltinGlobalVar(module, name, ConstFunction(new BuiltinFun(module, List(IntDatatype(false), IntDatatype(false)), BoolDatatype(false),
     Some(args => ConstBool(compileTimeFunction(args.head.toInt, args(1).toInt))),
     () => List(
@@ -92,7 +107,7 @@ def comparisonOperator(module: => Module, name: String, compileTimeFunction: (Lo
       Store(Address(Reg.RBP), Reg.RCX, RegSize.Byte),
       Ret()
     ),
-    binaryOperatorGraph(graphOp, List(opt.IntDatatype, opt.IntDatatype), opt.BoolDatatype),
+    compOperatorGraph(graphOp, swapped, List(opt.IntDatatype, opt.IntDatatype), opt.BoolDatatype),
     ctx => {
       ctx.add(
         Load(Reg.RAX, Reg.RBP + ctx.secondaryOffset),
@@ -118,13 +133,13 @@ def builtinVars(module: => Module): List[GlobalVar] = List(
   mulOperator(module),
   divOperator(module, "/", _ / _, Reg.RAX, (data1, data2, nextCtrl) => opt.DivInt(data1, data2, nextCtrl)),
   divOperator(module, "%", _ % _, Reg.RDX, (data1, data2, nextCtrl) => opt.ModInt(data1, data2, nextCtrl)),
-
-//  comparisonOperator(module, ">", _ > _, Flag.Greater),
-//  comparisonOperator(module, "<", _ < _, Flag.Less),
-//  comparisonOperator(module, ">=", _ >= _, Flag.GreaterOrEqual),
-//  comparisonOperator(module, "<=", _ <= _, Flag.LessOrEqual),
-//  comparisonOperator(module, "==", _ == _, Flag.Zero),
-//  comparisonOperator(module, "!=", _ != _, Flag.NotZero),
+  
+  comparisonOperator(module, ">", _ > _, Flag.Greater, false, (data, nextCtrl) => opt.IsGreater(data, nextCtrl)),
+  comparisonOperator(module, "<", _ < _, Flag.Less, true, (data, nextCtrl) => opt.IsGreater(data, nextCtrl)),
+  comparisonOperator(module, ">=", _ >= _, Flag.GreaterOrEqual, false, (data, nextCtrl) => opt.IsGreaterOrZero(data, nextCtrl)),
+  comparisonOperator(module, "<=", _ <= _, Flag.LessOrEqual, true, (data, nextCtrl) => opt.IsGreaterOrZero(data, nextCtrl)),
+  comparisonOperator(module, "==", _ == _, Flag.Zero, false, (data, nextCtrl) => opt.IsZero(data, nextCtrl)),
+  comparisonOperator(module, "!=", _ != _, Flag.NotZero, false, (data, nextCtrl) => opt.IsNotZero(data, nextCtrl)),
 
   new BuiltinGlobalVar(module, "println", ConstFunction(new BuiltinFun(module, List(IntDatatype(false)), UnitDatatype(false),
     None,

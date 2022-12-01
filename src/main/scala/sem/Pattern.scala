@@ -74,10 +74,6 @@ object Pattern {
       })
   }
 
-//  def generateIrLocal(pattern: Pattern[LocalVar], expr: opt.Dataflow, nextCtrl: opt.Controlflow, ): opt.Controlflow = generateIr(pattern, expr, nextCtrl, (patternVar, expr, nextCtrl) => opt.WriteLocal(localVars(patternVar), expr, nextCtrl))
-  
-  // def generateIrGlobal(pattern: Pattern[UserGlobalVar], expr: opt.Dataflow, nextCtrl: opt.Controlflow, globalVars: Map[GlobalVar, Int]): opt.Controlflow = generateIr(pattern, expr, nextCtrl, (patternVar, expr, nextCtrl) => opt.WriteGlobal(globalVars(patternVar), expr, nextCtrl))
-  
   def generateIrGlobal(pattern: Pattern[UserGlobalVar], expr: opt.Dataflow, nextCtrl: opt.Controlflow): (opt.Controlflow, List[(GlobalVar, opt.Datatype, opt.Dataflow)]) = pattern match {
     case VarPattern(patternVar, _) =>
       (nextCtrl, List((patternVar, patternVar.datatype.optDatatype, expr)))

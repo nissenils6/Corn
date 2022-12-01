@@ -78,6 +78,7 @@ abstract class Op {
       case IntLit(int, next) => node(int.toString) :: ctrl_edge(next) :: recur(next)
       case BoolLit(bool, next) => node(bool.toString) :: ctrl_edge(next) :: recur(next)
       case FunLit(fun, next) => node(s"function[${funIds(fun())}]") :: ctrl_edge(next) :: recur(next)
+      case TupleLit(elements, next) => node(s"tuple") :: ctrl_edge(next) :: (recur(next) ::: elements.map(data_edge))
       case AddInt(addInts, subInts, next) => node("+") :: ctrl_edge(next) :: (recur(next) ::: addInts.map(data_edge) ::: subInts.map(data_edge_label("Negate")))
       case AndInt(ints, next) => node("&") :: ctrl_edge(next) :: (recur(next) ::: ints.map(data_edge))
       case OrInt(ints, next) => node("|") :: ctrl_edge(next) :: (recur(next) ::: ints.map(data_edge))
@@ -85,10 +86,14 @@ abstract class Op {
       case MultInt(ints, next) => node("*") :: ctrl_edge(next) :: (recur(next) ::: ints.map(data_edge))
       case DivInt(dividend, divisor, next) => node("/") :: ctrl_edge(next) :: data_edge_label("Dividend")(dividend) :: data_edge_label("Divisor")(divisor) :: recur(next)
       case ModInt(dividend, divisor, next) => node("%") :: ctrl_edge(next) :: data_edge_label("Dividend")(dividend) :: data_edge_label("Divisor")(divisor) :: recur(next)
+      case IsGreater(int, next) => node(">0") :: ctrl_edge(next) :: data_edge(int) :: recur(next)
+      case IsGreaterOrZero(int, next) => node(">=0") :: ctrl_edge(next) :: data_edge(int) :: recur(next)
+      case IsZero(int, next) => node("==0") :: ctrl_edge(next) :: data_edge(int) :: recur(next)
+      case IsNotZero(int, next) => node("!=0") :: ctrl_edge(next) :: data_edge(int) :: recur(next)
       case Branch(condition, ifTrue, ifFalse) => node("branch") :: data_edge(condition) :: ctrl_edge(ifTrue) :: ctrl_edge_sec(ifFalse) :: (recur(ifTrue) ::: recur(ifFalse))
       case Phi(branch, ifTrue, ifFalse, next) => node("phi") :: phi_edge(branch) :: data_edge(ifTrue) :: data_edge_sec(ifFalse) :: recur(next)
       case TupleIdx(tuple, idx, next) => node(s"tuple[$idx]") :: data_edge(tuple) :: recur(next)
-      case ReadRef(ref, next) => node(s"ref") :: data_edge(ref) :: ctrl_edge(next) :: recur(next)
+      case ReadRef(ref, next) => node(s"val") :: data_edge(ref) :: ctrl_edge(next) :: recur(next)
       case WriteRef(ref, data, next) => node(s"ref = ") :: data_edge(ref) :: data_edge_sec(data) :: ctrl_edge(next) :: recur(next)
       case ReadLocal(local, next) => node(s"local[$local]") :: ctrl_edge(next) :: recur(next)
       case WriteLocal(local, data, next) => node(s"local[$local] = ") :: data_edge(data) :: ctrl_edge(next) :: recur(next)
@@ -107,6 +112,7 @@ case class UnitLit(next: Controlflow) extends Op
 case class IntLit(int: Long, next: Controlflow) extends Op
 case class BoolLit(bool: Boolean, next: Controlflow) extends Op
 case class FunLit(fun: () => Fun, next: Controlflow) extends Op
+case class TupleLit(elements: List[Dataflow], next: Controlflow) extends Op
 case class AddInt(addInts: List[Dataflow], subInts: List[Dataflow], next: Controlflow) extends Op
 case class AndInt(ints: List[Dataflow], next: Controlflow) extends Op
 case class OrInt(ints: List[Dataflow], next: Controlflow) extends Op
@@ -114,6 +120,10 @@ case class XorInt(ints: List[Dataflow], next: Controlflow) extends Op
 case class MultInt(ints: List[Dataflow], next: Controlflow) extends Op
 case class DivInt(dividend: Dataflow, divisor: Dataflow, next: Controlflow) extends Op
 case class ModInt(dividend: Dataflow, divisor: Dataflow, next: Controlflow) extends Op
+case class IsGreater(int: Dataflow, next: Controlflow) extends Op
+case class IsGreaterOrZero(int: Dataflow, next: Controlflow) extends Op
+case class IsZero(int: Dataflow, next: Controlflow) extends Op
+case class IsNotZero(int: Dataflow, next: Controlflow) extends Op
 case class Branch(condition: Dataflow, ifTrue: Controlflow, ifFalse: Controlflow) extends Op
 case class Phi(branch: Branch, ifTrue: Dataflow, ifFalse: Dataflow, next: Controlflow) extends Op
 case class TupleIdx(tuple: Dataflow, idx: Int, next: Controlflow) extends Op
@@ -161,6 +171,6 @@ class OptUnit(val funs: List[Fun], val vars: List[Var], val staticData: StaticDa
   def format(): String = {
     val funIds: Map[Fun, Int] = funs.zipWithIndex.toMap
     val varIds: Map[Var, Int] = vars.zipWithIndex.toMap
-    (funs.zipWithIndex.map {case (f, index) => f.format(index, funIds, varIds)} ::: vars.zipWithIndex.map {case (v, index) => v.format(index, funIds, varIds)}).mkString("digraph {\n", "\n", "\n}")
+    (funs.zipWithIndex.map { case (f, index) => f.format(index, funIds, varIds) } ::: vars.zipWithIndex.map { case (v, index) => v.format(index, funIds, varIds) }).mkString("digraph {\n", "\n", "\n}")
   }
 }

@@ -201,7 +201,7 @@ private def parsePattern(state: ParserState): (Pattern, ParserState) = state.tok
   case SymbolToken("(", startRange) :: rest =>
     val (patterns, newState, endRange) = parseSep(state withTokens rest, parsePattern, ",", ")", "pattern")
     patterns match {
-      case List() => throw Error.todo(startRange | endRange)
+      case List() => throw Error.internal(startRange | endRange)
       case List(pattern) => (pattern, newState)
       case patterns => (TuplePattern(patterns, startRange | endRange), newState)
     }

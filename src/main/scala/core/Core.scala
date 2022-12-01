@@ -1,8 +1,8 @@
 package core
 
 import lex.Token
-import syn.Expr
 import sem.{Datatype, LocalVar}
+import syn.Expr
 
 import scala.annotation.{tailrec, targetName, unused}
 import scala.collection.mutable
@@ -31,10 +31,32 @@ case class ErrorGroup(errors: List[Error]) extends Exception {
 }
 
 object Error {
+  val CMD_LINE = "Command Line"
   val LEXICAL = "Lexical"
   val SYNTAX = "Syntax"
   val SEMANTIC = "Semantic"
   val INTERNAL = "Internal"
+
+  def cmdLine(message: String, range: FilePosRange): Error =
+    Error(CMD_LINE, range.file, List(ErrorComponent(range, Some(message))))
+
+  def lexical(message: String, range: FilePosRange): Error =
+    Error(LEXICAL, range.file, List(ErrorComponent(range, Some(message))))
+
+  def syntax(message: String, range: FilePosRange): Error =
+    Error(SYNTAX, range.file, List(ErrorComponent(range, Some(message))))
+
+  def semantic(message: String, range: FilePosRange): Error =
+    Error(SEMANTIC, range.file, List(ErrorComponent(range, Some(message))))
+
+  def internal(file: File): Error =
+    Error(INTERNAL, file, List.empty)
+
+  def internal(range: FilePosRange): Error =
+    Error(INTERNAL, range.file, List(ErrorComponent(range)))
+
+  def internal(message: String, range: FilePosRange): Error =
+    Error(INTERNAL, range.file, List(ErrorComponent(range, Some(message))))
 
   def unexpected(expr: Expr, expected: String): Error =
     Error(SYNTAX, expr.range.file, List(ErrorComponent(expr.range, Some(s"Unexpected expression, expected '$expected'"))))
@@ -45,9 +67,6 @@ object Error {
   def unexpected(expected: String, file: File): Error =
     Error(SYNTAX, file, List(ErrorComponent(file.lastRange, Some(s"Unexpected end of file, expected '$expected'"))))
 
-  def semantic(message: String, range: FilePosRange): Error =
-    Error(SEMANTIC, range.file, List(ErrorComponent(range, Some(message))))
-
   def typeMismatch(datatype: Datatype, expectedDatatype: Datatype, range: FilePosRange, patternRange: FilePosRange): Error =
     Error(SEMANTIC, range.file, List(
       ErrorComponent(patternRange, Some(s"'$expectedDatatype' expected")),
@@ -56,26 +75,9 @@ object Error {
 
   def datatypeExpected(range: FilePosRange): Error =
     Error(SEMANTIC, range.file, List(ErrorComponent(range, Some(s"Expected compile-time expression evaluating to value of type 'Type'"))))
-
-  def todo(file: File): Error =
-    Error(INTERNAL, file, List.empty)
-
-  def todo(range: FilePosRange): Error =
-    Error(INTERNAL, range.file, List(ErrorComponent(range)))
-
-  def todo(message: String, range: FilePosRange): Error =
-    Error(INTERNAL, range.file, List(ErrorComponent(range, Some(message))))
 }
 
-case class File(filePath: String) {
-  val name: String = filePath.split('/').last.split('.').head
-  val source: String = {
-    val fileContent = io.Source.fromFile(filePath)
-    val source = fileContent.getLines().mkString("\n")
-    fileContent.close()
-    source
-  }
-
+class File(val name: String, val source: String) {
   val newlines: Array[Int] = (for {
     (char, index) <- source.zipWithIndex
     if char == '\n'
@@ -84,6 +86,17 @@ case class File(filePath: String) {
   }
 
   def lastRange: FilePosRange = FilePosRange(source.length, source.length + 1, this)
+}
+
+object File {
+  def apply(name: String, source: String): File = new File(name, source)
+
+  def apply(filePath: String): File = {
+    val fileContent = io.Source.fromFile(s"$filePath.txt")
+    val source = fileContent.getLines().mkString("\n")
+    fileContent.close()
+    new File(filePath.split('/').last, source)
+  }
 }
 
 case class FilePosRange(start: Int, end: Int, file: File) {

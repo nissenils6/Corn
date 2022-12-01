@@ -2,13 +2,14 @@ package sem
 
 import core.*
 import gen.*
-import opt.Controlflow
+import opt.{Controlflow, Dataflow}
 import syn.AssignExpr
 
 import scala.annotation.tailrec
 import scala.collection.immutable.List
 import scala.collection.mutable
 import scala.compiletime.ops.int
+import scala.concurrent.ExecutionContext.global
 
 abstract class Expr() {
   def module: Module
@@ -156,7 +157,7 @@ abstract class Expr() {
     case BlockExpr(exprs, lastExpr, _, _, _) => ctx.scope(if exprs.map(_.constEval(ctx)).forall(_.nonEmpty) then lastExpr.constEval(ctx) else None)
     case UnitExpr(_, _) => Some(ConstUnit)
     case LetExpr(pattern, expr, _, _) => expr.constEval(ctx).map(value => ctx.add(pattern, value))
-    case AssignExpr(GlobalVarExpr(globalVar, _, range), expr, _, _) => throw Error.todo(range)
+    case AssignExpr(GlobalVarExpr(globalVar, _, range), expr, _, _) => throw Error.internal(range)
     case AssignExpr(LocalVarExpr(localVar, _, range), expr, _, _) => for {
       value <- expr.constEval(ctx)
     } yield ctx.add(localVar, value)
@@ -165,7 +166,7 @@ abstract class Expr() {
       value <- expr.constEval(ctx)
     } yield constRef match {
       case ConstRef(VarRefBox(localVar: LocalVar)) => ctx.add(localVar, value)
-      case ConstRef(VarRefBox(globalVar: GlobalVar)) => throw Error.todo(range)
+      case ConstRef(VarRefBox(globalVar: GlobalVar)) => throw Error.internal(range)
     }
     case FunExpr(fun, _, _) => Some(ConstFunction(fun))
     case FunTypeExpr(parameters, returnType, _, _) => Some(ConstType(FunDatatype(parameters.map(_.constDatatype), returnType.constDatatype, false)))
@@ -229,7 +230,7 @@ abstract class Expr() {
         case Some(label) => globalVar.datatype.generateCopyCode(ctx, Reg.RBP + stackOffset, Address(label))
         case None => {
           println()
-          throw Error.todo(range)
+          throw Error.internal(range)
         }
       }
     case RefGlobalVarExpr(globalVar, _, range) =>
@@ -238,7 +239,7 @@ abstract class Expr() {
           Lea(Reg.RAX, Address(label)),
           Store(Reg.RBP + ctx.secondaryOffset, Reg.RAX)
         )
-        case None => throw Error.todo(range)
+        case None => throw Error.internal(range)
       }
       ctx.secondaryOffset += 8
     case LocalVarExpr(localVar, _, _) =>
@@ -306,7 +307,7 @@ abstract class Expr() {
       expr.generateCode(ctx)
       globalVar.label match {
         case Some(label) => globalVar.datatype.generateCopyCode(ctx, Address(label), Reg.RBP + stackOffset)
-        case None => throw Error.todo(range)
+        case None => throw Error.internal(range)
       }
     case AssignExpr(ValExpr(ptrExpr, _, _), expr, _, _) =>
       val stackOffset = ctx.secondaryOffset
@@ -321,8 +322,8 @@ abstract class Expr() {
         Store(Reg.RBP + ctx.secondaryOffset, Reg.RAX)
       )
       ctx.secondaryOffset += 8
-    case FunTypeExpr(_, _, _, range) => Error.todo("", range)
-    case RefTypeExpr(_, _, range) => Error.todo("", range)
+    case FunTypeExpr(_, _, _, range) => Error.internal("", range)
+    case RefTypeExpr(_, _, range) => Error.internal("", range)
     case IfExpr(condition, ifBlock, elseBlock, _, _) =>
       val baseOffset = ctx.secondaryOffset
       condition.generateCode(ctx)
@@ -349,7 +350,7 @@ abstract class Expr() {
       elseBlock.generateCode(ctx)
 
       ctx.add(Label(endLabel))
-    case MutExpr(_, _, _, range) => Error.todo("", range)
+    case MutExpr(_, _, _, range) => Error.internal("", range)
   }
 
   def generateIr(nextCtrl: opt.Controlflow, context: IrGenContext, localVars: Map[LocalVar, Int]): (opt.Dataflow, opt.Controlflow) = this match {
@@ -404,7 +405,17 @@ abstract class Expr() {
       lazy val boolData: opt.Dataflow = opt.Dataflow(() => Some(boolOp))
       lazy val boolCtrl: opt.Controlflow = opt.Controlflow(() => boolOp)
       (boolData, boolCtrl)
-    case TupleExpr(elements, _, _) => ???
+    case TupleExpr(elements, _, _) =>
+      lazy val (elementsCtrl: opt.Controlflow, elementsData: List[opt.Dataflow]) = elements.foldRight((tupleCtrl, List[opt.Dataflow]()))((expr, tuple) => {
+        lazy val (next, dataflows) = tuple
+        lazy val (exprData: opt.Dataflow, exprCtrl: opt.Controlflow) = expr.generateIr(next, context, localVars)
+        (exprCtrl, exprData :: dataflows)
+      })
+
+      lazy val tupleOp: opt.Op = opt.TupleLit(elementsData, nextCtrl)
+      lazy val tupleData: opt.Dataflow = opt.Dataflow(() => Some(tupleOp))
+      lazy val tupleCtrl: opt.Controlflow = opt.Controlflow(() => tupleOp)
+      (tupleData, elementsCtrl)
     case BlockExpr(exprs, lastExpr, vars, _, _) =>
       lazy val exprsCtrl: opt.Controlflow = exprs.foldRight(lastExprCtrl)((expr, ctrl) => expr.generateIr(ctrl, context, localVars)._2)
       lazy val (lastExprData: opt.Dataflow, lastExprCtrl: opt.Controlflow) = lastExpr.generateIr(nextCtrl, context, localVars)
@@ -422,14 +433,46 @@ abstract class Expr() {
 
       lazy val patternCtrl: opt.Controlflow = Pattern.generateIrLocal(pattern, exprData, nextCtrl, localVars)
       (exprData, exprCtrl)
-    case AssignExpr(left, right, _, _) => ???
+    case AssignExpr(LocalVarExpr(localVar, _, _), expr, _, _) =>
+      lazy val (exprData: opt.Dataflow, exprCtrl: opt.Controlflow) = expr.generateIr(writeCtrl, context, localVars)
+
+      lazy val writeOp: opt.Op = opt.WriteLocal(localVars(localVar), exprData, nextCtrl)
+      lazy val writeCtrl: opt.Controlflow = opt.Controlflow(() => writeOp)
+      (exprData, exprCtrl)
+    case AssignExpr(GlobalVarExpr(globalVar, _, _), expr, _, _) =>
+      lazy val (exprData: opt.Dataflow, exprCtrl: opt.Controlflow) = expr.generateIr(writeCtrl, context, localVars)
+
+      lazy val (global, index) = context(globalVar)
+      lazy val writeOp: opt.Op = opt.WriteGlobal(() => global, index, exprData, nextCtrl)
+      lazy val writeCtrl: opt.Controlflow = opt.Controlflow(() => writeOp)
+      (exprData, exprCtrl)
+    case AssignExpr(ValExpr(refExpr, _, _), expr, _, _) =>
+      lazy val (refExprData: opt.Dataflow, refExprCtrl: opt.Controlflow) = refExpr.generateIr(exprCtrl, context, localVars)
+      lazy val (exprData: opt.Dataflow, exprCtrl: opt.Controlflow) = expr.generateIr(writeCtrl, context, localVars)
+
+      lazy val writeOp: opt.Op = opt.WriteRef(refExprData, exprData, nextCtrl)
+      lazy val writeCtrl: opt.Controlflow = opt.Controlflow(() => writeOp)
+      (exprData, refExprCtrl)
     case FunExpr(fun, _, _) =>
       lazy val funOp: opt.Op = opt.FunLit(() => context(fun), nextCtrl)
       lazy val funData: opt.Dataflow = opt.Dataflow(() => Some(funOp))
       lazy val funCtrl: opt.Controlflow = opt.Controlflow(() => funOp)
       (funData, funCtrl)
-    case IfExpr(condition, ifBlock, elseBlock, _, _) => ???
-    case expr: Expr => throw Error(Error.INTERNAL, expr.range.file, List(ErrorComponent(expr.range, Some(s"Attempt to generate ir from compile time expression (this is bug in the semantic analyzer)"))))
+    case IfExpr(condition, ifBlock, elseBlock, _, _) =>
+      lazy val (conditionData: opt.Dataflow, conditionCtrl: opt.Controlflow) = condition.generateIr(branchCtrl, context, localVars)
+
+      lazy val branchOp: opt.Branch = opt.Branch(conditionData, ifCtrl, elseCtrl)
+      lazy val branchCtrl: opt.Controlflow = opt.Controlflow(() => branchOp)
+
+      lazy val (ifData: opt.Dataflow, ifCtrl: opt.Controlflow) = ifBlock.generateIr(phiCtrl, context, localVars)
+      lazy val (elseData: opt.Dataflow, elseCtrl: opt.Controlflow) = elseBlock.generateIr(phiCtrl, context, localVars)
+
+      lazy val phiOp: opt.Phi = opt.Phi(branchOp, ifData, elseData, nextCtrl)
+      lazy val phiData: opt.Dataflow = opt.Dataflow(() => Some(phiOp))
+      lazy val phiCtrl: opt.Controlflow = opt.Controlflow(() => phiOp)
+
+      (phiData, conditionCtrl)
+    case expr: Expr => throw Error.internal(s"Attempt to generate ir from compile time expression (this is bug in the semantic analyzer)", expr.range)
   }
 
   def format(indentation: Int): String = this match {
@@ -476,7 +519,7 @@ case class MutExpr(expr: Expr, mutable: Boolean, module: Module, range: FilePosR
 class LocalVar(val module: Module, val name: String, letExpr: => Option[LetExpr], patternNav: PatternNav, typeExpr: Option[syn.Expr], val range: FilePosRange) extends Var {
   lazy val datatype: Datatype = typeExpr.map(typeExpr => analyzeExpr(ExprParsingContext(module, None))(typeExpr).constDatatype).getOrElse(patternNav.datatype(letExpr match {
     case Some(letExpr) => letExpr.expr.returnType.withMut(false)
-    case None => throw Error.todo(module.file)
+    case None => throw Error.internal(module.file)
   }))
   lazy val constVal: Option[ConstVal] = if datatype.mutable then None else letExpr.flatMap(_.constVal.map(patternNav.const))
 
@@ -617,32 +660,32 @@ def analyzeExpr(ctx: ExprParsingContext)(expr: syn.Expr): Expr = expr match {
     appliedLayers.find(_.nonEmpty).flatten match {
       case Some((globalVar: GlobalVar, args)) => CallExpr(GlobalVarExpr(globalVar, ctx.module, funRange), args, ctx.module, range)
       case Some((localVar: LocalVar, args)) => CallExpr(LocalVarExpr(localVar, ctx.module, funRange), args, ctx.module, range)
-      case _ => throw Error.todo(funRange)
+      case _ => throw Error.internal(funRange)
     }
   case syn.CallExpr(function, posArgs, range) =>
     val analyzedFunExpr = analyzeExpr(ctx)(function)
     analyzedFunExpr.returnType match {
       case FunDatatype(params, _, _) =>
-        if (params.length != posArgs.length) throw Error.todo(range.file)
+        if (params.length != posArgs.length) throw Error.internal(range.file)
         val analyzedArgs = posArgs.map(analyzeExpr(ctx))
-        if (!params.zip(analyzedArgs.map(_.returnType)).forall(t => t._1 == t._2)) throw Error.todo(range)
+        if (!params.zip(analyzedArgs.map(_.returnType)).forall(t => t._1 == t._2)) throw Error.internal(range)
         CallExpr(analyzedFunExpr, analyzedArgs, ctx.module, range)
       case datatype => throw Error.semantic(s"'$datatype' is not callable", function.range)
     }
   case syn.IdenExpr(iden, range) => ctx.lookup(iden, range) match {
     case Some(globalVar: GlobalVar) => GlobalVarExpr(globalVar, ctx.module, range)
     case Some(localVar: LocalVar) => LocalVarExpr(localVar, ctx.module, range)
-    case None => throw Error.todo(ctx.toString, range)
+    case None => throw Error.internal(ctx.toString, range)
   }
   case syn.RefExpr(syn.IdenExpr(iden, idenRange), range) => ctx.lookup(iden, idenRange) match {
     case Some(globalVar: GlobalVar) => RefGlobalVarExpr(globalVar, ctx.module, range | idenRange)
     case Some(localVar: LocalVar) => RefLocalVarExpr(localVar, ctx.module, range | idenRange)
-    case None => throw Error.todo(ctx.toString, range | idenRange)
+    case None => throw Error.internal(ctx.toString, range | idenRange)
   }
   case syn.RefExpr(expr, range) => RefTypeExpr(analyzeExpr(ctx)(expr), ctx.module, range)
   case syn.ValExpr(expr, range) =>
     val analyzedExpr = analyzeExpr(ctx)(expr)
-    if (!analyzedExpr.returnType.isInstanceOf[RefDatatype]) throw Error.todo(ctx.module.file)
+    if (!analyzedExpr.returnType.isInstanceOf[RefDatatype]) throw Error.internal(ctx.module.file)
     ValExpr(analyzedExpr, ctx.module, range)
   case syn.IntExpr(int, range) => IntExpr(int, ctx.module, range)
   case syn.BoolExpr(bool, range) => BoolExpr(bool, ctx.module, range)
@@ -662,10 +705,10 @@ def analyzeExpr(ctx: ExprParsingContext)(expr: syn.Expr): Expr = expr match {
     val analyzedLeft = analyzeExpr(ctx)(left)
     val analyzedRight = analyzeExpr(ctx)(right)
     if (analyzedRight.returnType !~=> analyzedLeft.returnType) throw Error.typeMismatch(analyzedRight.returnType, analyzedLeft.returnType, analyzedRight.range, analyzedLeft.range)
-    if (!analyzedLeft.returnType.mutable) throw Error.todo(analyzedLeft.range)
+    if (!analyzedLeft.returnType.mutable) throw Error.internal(analyzedLeft.range)
     analyzedLeft match {
       case _: (LocalVarExpr | GlobalVarExpr | ValExpr) => ()
-      case _ => throw Error.todo(analyzedLeft.range)
+      case _ => throw Error.internal(analyzedLeft.range)
     }
     AssignExpr(analyzedLeft, analyzedRight, ctx.module, range)
   case syn.FunExpr(parameters, returnType, expr, range) =>

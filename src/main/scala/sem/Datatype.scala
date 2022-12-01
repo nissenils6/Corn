@@ -30,7 +30,6 @@ abstract class Datatype {
     case UnitDatatype(_) => opt.UnitDatatype
     case IntDatatype(_) => opt.IntDatatype
     case BoolDatatype(_) => opt.BoolDatatype
-    case TypeDatatype(_) => ???
     case RefDatatype(datatype, _) => opt.RefDatatype(datatype.optDatatype)
     case TupleDatatype(elements, _) => opt.TupleDatatype(elements.map(_.optDatatype))
     case FunDatatype(params, returnType, _) => opt.FunDatatype(params.map(_.optDatatype), List(returnType.optDatatype))
@@ -145,7 +144,17 @@ abstract class ConstVal {
       lazy val boolData: opt.Dataflow = opt.Dataflow(() => Some(boolOp))
       lazy val boolCtrl: opt.Controlflow = opt.Controlflow(() => boolOp)
       (boolData, boolCtrl)
-    case ConstTuple(elements) => ???
+    case ConstTuple(elements) =>
+      lazy val (elementsCtrl: opt.Controlflow, elementsData: List[opt.Dataflow]) = elements.foldRight((tupleCtrl, List[opt.Dataflow]()))((constVal, tuple) => {
+        val (next, dataAcc) = tuple
+        lazy val (constData: opt.Dataflow, constCtrl: opt.Controlflow) = constVal.generateIr(next, context)
+        (constCtrl, constData :: dataAcc)
+      })
+
+      lazy val tupleOp: opt.Op = opt.TupleLit(elementsData, nextCtrl)
+      lazy val tupleData: opt.Dataflow = opt.Dataflow(() => Some(tupleOp))
+      lazy val tupleCtrl: opt.Controlflow = opt.Controlflow(() => tupleOp)
+      (tupleData, elementsCtrl)
     case ConstFunction(fun) =>
       lazy val funOp: opt.Op = opt.FunLit(() => context(fun), nextCtrl)
       lazy val funData: opt.Dataflow = opt.Dataflow(() => Some(funOp))
@@ -177,7 +186,7 @@ abstract class ConstVal {
     )
     case ConstUnit | ConstType(_) => List.empty
   }
-  
+
   def gatherFuns(funs: mutable.Set[Fun]): Unit = this match {
     case ConstTuple(elements) => elements.foreach(_.gatherFuns(funs))
     case ConstFunction(function) => funs.add(function)

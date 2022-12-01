@@ -184,11 +184,16 @@ class UserFun(val module: Module, parameters: List[syn.Pattern], retTypeExpr: Op
   override def generateInlineCode(ctx: ExprCodeGenContext): Boolean = false
 
   override def generateIr(context: IrGenContext): opt.Fun = {
-    val localVars = analyzedExpr.gatherLocals
-    lazy val (exprData: opt.Dataflow, exprCtrl: opt.Controlflow) = analyzedExpr.generateIr(retCtrl, context, localVars.zipWithIndex.toMap)
+    val localVarsList = analyzedExpr.gatherLocals.concat(params.values)
+    val localVars = localVarsList.zipWithIndex.toMap
+    lazy val patternCtrl: opt.Controlflow = args.zipWithIndex.foldRight(exprCtrl)((tuple, next) => {
+      val (pattern, index) = tuple
+      Pattern.generateIrLocal(pattern, opt.Dataflow(() => None, index), next, localVars)
+    })
+    lazy val (exprData: opt.Dataflow, exprCtrl: opt.Controlflow) = analyzedExpr.generateIr(retCtrl, context, localVars)
     lazy val retOp = opt.Ret(List(exprData))
     lazy val retCtrl = opt.Controlflow(() => retOp)
-    opt.CodeFun(exprCtrl, signature.optDatatype.asInstanceOf[opt.FunDatatype], localVars.map(_.datatype.optDatatype))
+    opt.CodeFun(patternCtrl, signature.optDatatype.asInstanceOf[opt.FunDatatype], localVarsList.map(_.datatype.optDatatype))
   }
 
   lazy val runtime: Boolean = signature.runtime && analyzedExpr.runtime
@@ -263,19 +268,9 @@ object IrGenBuiltin {
 }
 
 case class IrGenContext(funs: () => Map[Fun, () => opt.Fun], globalVars: () => Map[GlobalVar, () => (opt.Var, Int)]) {
-  def apply(fun: Fun): opt.Fun = if (funs().contains(fun)) {
-    funs()(fun)()
-  } else {
-    println(fun.signature.toString)
-    ???
-  }
-
-  def apply(globalVar: GlobalVar): (opt.Var, Int) = if (globalVars().contains(globalVar)) {
-    globalVars()(globalVar)()
-  } else {
-    println(globalVar.name)
-    ???
-  }
+  def apply(fun: Fun): opt.Fun = funs()(fun)()
+  
+  def apply(globalVar: GlobalVar): (opt.Var, Int) = globalVars()(globalVar)()
 }
 
 class Module(val file: File, fileContent: => (Map[String, List[GlobalVar]], List[UserGlobalVarInit])) {
