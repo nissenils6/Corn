@@ -128,39 +128,48 @@ abstract class ConstVal {
     case _ => None
   }
 
-  def generateIr(nextCtrl: opt.Controlflow, context: IrGenContext): (opt.Dataflow, opt.Controlflow) = this match {
-    case ConstUnit =>
-      lazy val unitOp: opt.Op = opt.UnitLit(nextCtrl)
-      lazy val unitData: opt.Dataflow = opt.Dataflow(() => Some(unitOp))
-      lazy val unitCtrl: opt.Controlflow = opt.Controlflow(() => unitOp)
-      (unitData, unitCtrl)
-    case ConstInt(int) =>
-      lazy val intOp: opt.Op = opt.IntLit(int, nextCtrl)
-      lazy val intData: opt.Dataflow = opt.Dataflow(() => Some(intOp))
-      lazy val intCtrl: opt.Controlflow = opt.Controlflow(() => intOp)
-      (intData, intCtrl)
-    case ConstBool(bool) =>
-      lazy val boolOp: opt.Op = opt.BoolLit(bool, nextCtrl)
-      lazy val boolData: opt.Dataflow = opt.Dataflow(() => Some(boolOp))
-      lazy val boolCtrl: opt.Controlflow = opt.Controlflow(() => boolOp)
-      (boolData, boolCtrl)
-    case ConstTuple(elements) =>
-      lazy val (elementsCtrl: opt.Controlflow, elementsData: List[opt.Dataflow]) = elements.foldRight((tupleCtrl, List[opt.Dataflow]()))((constVal, tuple) => {
-        val (next, dataAcc) = tuple
-        lazy val (constData: opt.Dataflow, constCtrl: opt.Controlflow) = constVal.generateIr(next, context)
-        (constCtrl, constData :: dataAcc)
-      })
-
-      lazy val tupleOp: opt.Op = opt.TupleLit(elementsData, nextCtrl)
-      lazy val tupleData: opt.Dataflow = opt.Dataflow(() => Some(tupleOp))
-      lazy val tupleCtrl: opt.Controlflow = opt.Controlflow(() => tupleOp)
-      (tupleData, elementsCtrl)
-    case ConstFunction(fun) =>
-      lazy val funOp: opt.Op = opt.FunLit(() => context(fun), nextCtrl)
-      lazy val funData: opt.Dataflow = opt.Dataflow(() => Some(funOp))
-      lazy val funCtrl: opt.Controlflow = opt.Controlflow(() => funOp)
-      (funData, funCtrl)
+  def generateIr(context: IrGenContext): opt.ConstVal = this match {
+    case ConstUnit => opt.ConstUnit
+    case ConstInt(int) => opt.ConstInt(int)
+    case ConstBool(bool) => opt.ConstBool(bool)
+    case ConstRef(_) => ???
+    case ConstTuple(elements) => opt.ConstTuple(elements.map(_.generateIr(context)))
+    case ConstFunction(fun) => opt.ConstFun(() => context(fun))
   }
+
+//  def generateIr(nextCtrl: opt.Controlflow, context: IrGenContext): (opt.Dataflow, opt.Controlflow) = this match {
+//    case ConstUnit =>
+//      lazy val unitOp: opt.Op = opt.UnitLit(nextCtrl)
+//      lazy val unitData: opt.Dataflow = opt.Dataflow(() => Some(unitOp))
+//      lazy val unitCtrl: opt.Controlflow = opt.Controlflow(() => unitOp)
+//      (unitData, unitCtrl)
+//    case ConstInt(int) =>
+//      lazy val intOp: opt.Op = opt.IntLit(int, nextCtrl)
+//      lazy val intData: opt.Dataflow = opt.Dataflow(() => Some(intOp))
+//      lazy val intCtrl: opt.Controlflow = opt.Controlflow(() => intOp)
+//      (intData, intCtrl)
+//    case ConstBool(bool) =>
+//      lazy val boolOp: opt.Op = opt.BoolLit(bool, nextCtrl)
+//      lazy val boolData: opt.Dataflow = opt.Dataflow(() => Some(boolOp))
+//      lazy val boolCtrl: opt.Controlflow = opt.Controlflow(() => boolOp)
+//      (boolData, boolCtrl)
+//    case ConstTuple(elements) =>
+//      lazy val (elementsCtrl: opt.Controlflow, elementsData: List[opt.Dataflow]) = elements.foldRight((tupleCtrl, List[opt.Dataflow]()))((constVal, tuple) => {
+//        val (next, dataAcc) = tuple
+//        lazy val (constData: opt.Dataflow, constCtrl: opt.Controlflow) = constVal.generateIr(next, context)
+//        (constCtrl, constData :: dataAcc)
+//      })
+//
+//      lazy val tupleOp: opt.Op = opt.TupleLit(elementsData, nextCtrl)
+//      lazy val tupleData: opt.Dataflow = opt.Dataflow(() => Some(tupleOp))
+//      lazy val tupleCtrl: opt.Controlflow = opt.Controlflow(() => tupleOp)
+//      (tupleData, elementsCtrl)
+//    case ConstFunction(fun) =>
+//      lazy val funOp: opt.Op = opt.FunLit(() => context(fun), nextCtrl)
+//      lazy val funData: opt.Dataflow = opt.Dataflow(() => Some(funOp))
+//      lazy val funCtrl: opt.Controlflow = opt.Controlflow(() => funOp)
+//      (funData, funCtrl)
+//  }
 
   def toInt: Long = this.asInt.get.int
   def toBool: Boolean = this.asBool.get.bool

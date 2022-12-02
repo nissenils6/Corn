@@ -1,8 +1,8 @@
 package opt
 
 import gen.AsmGen.label
+import sem.IrGenContext
 
-import scala.::
 import scala.collection.mutable
 
 abstract class Datatype {
@@ -16,8 +16,50 @@ case class RefDatatype(datatype: Datatype) extends Datatype
 case class TupleDatatype(elements: List[Datatype]) extends Datatype
 case class FunDatatype(params: List[Datatype], returnTypes: List[Datatype]) extends Datatype
 
+abstract class ConstVal {
+  def toGraph(nextCtrl: Controlflow): (Dataflow, Controlflow) = this match {
+    case ConstUnit =>
+      lazy val unitOp: Op = UnitLit(nextCtrl)
+      lazy val unitData: Dataflow = Dataflow(() => Some(unitOp))
+      lazy val unitCtrl: Controlflow = Controlflow(() => unitOp)
+      (unitData, unitCtrl)
+    case ConstInt(int) =>
+      lazy val intOp: Op = IntLit(int, nextCtrl)
+      lazy val intData: Dataflow = Dataflow(() => Some(intOp))
+      lazy val intCtrl: Controlflow = Controlflow(() => intOp)
+      (intData, intCtrl)
+    case ConstBool(bool) =>
+      lazy val boolOp: Op = BoolLit(bool, nextCtrl)
+      lazy val boolData: Dataflow = Dataflow(() => Some(boolOp))
+      lazy val boolCtrl: Controlflow = Controlflow(() => boolOp)
+      (boolData, boolCtrl)
+    case ConstTuple(elements) =>
+      lazy val (elementsCtrl: Controlflow, elementsData: List[Dataflow]) = elements.foldRight((tupleCtrl, List[Dataflow]()))((constVal, tuple) => {
+        val (next, dataAcc) = tuple
+        lazy val (constData: Dataflow, constCtrl: Controlflow) = constVal.toGraph(next)
+        (constCtrl, constData :: dataAcc)
+      })
+
+      lazy val tupleOp: Op = TupleLit(elementsData, nextCtrl)
+      lazy val tupleData: Dataflow = Dataflow(() => Some(tupleOp))
+      lazy val tupleCtrl: Controlflow = Controlflow(() => tupleOp)
+      (tupleData, elementsCtrl)
+    case ConstFun(fun) =>
+      lazy val funOp: Op = FunLit(fun, nextCtrl)
+      lazy val funData: Dataflow = Dataflow(() => Some(funOp))
+      lazy val funCtrl: Controlflow = Controlflow(() => funOp)
+      (funData, funCtrl)
+  }
+}
+
+case object ConstUnit extends ConstVal
+case class ConstInt(int: Long) extends ConstVal
+case class ConstBool(bool: Boolean) extends ConstVal
+case class ConstTuple(elements: List[ConstVal]) extends ConstVal
+case class ConstFun(fun: () => Fun) extends ConstVal
+
 case class Dataflow(valueLazy: () => Option[Op], idx: Int = 0) {
-  lazy val value = valueLazy()
+  lazy val value: Option[Op] = valueLazy()
 }
 
 object Dataflow {
@@ -25,7 +67,7 @@ object Dataflow {
 }
 
 case class Controlflow(opLazy: () => Op) {
-  lazy val op = opLazy()
+  lazy val op: Op = opLazy()
 }
 
 object Controlflow {
@@ -58,7 +100,10 @@ def graph_ctrl_edge_sec(main: Op)(controlflow: Controlflow): String = s"Op_${mai
 def graph_phi_edge(main: Op)(branch: Branch): String = s"Op_${main.id} -> Op_${branch.id} [color = green]"
 
 abstract class Op {
-  lazy val id = (math.random() * 1e15).toLong
+  lazy val id: Long = {
+    Op.idCounter += 1
+    Op.idCounter
+  }
 
   def format(formatted: mutable.Set[Long], funIndex: Int, funIds: Map[Fun, Int], varIds: Map[Var, Int]): List[String] = if (!formatted.contains(id)) {
     formatted.add(id)
@@ -106,6 +151,10 @@ abstract class Op {
       case Ret(returnValues) => node("return") :: returnValues.map(data_edge)
     }
   } else List.empty
+}
+
+object Op {
+  private var idCounter = 0
 }
 
 case class UnitLit(next: Controlflow) extends Op
@@ -168,6 +217,52 @@ case class DataElement(strings: List[String], size: Int, align: Int)
 case class StaticData(bss: Map[String, BssElement], const: Map[String, ConstElement], data: Map[String, DataElement], windowsFunctions: List[String])
 
 class OptUnit(val funs: List[Fun], val vars: List[Var], val staticData: StaticData) {
+  def transformFuns(transformer: PartialFunction[(Op, Controlflow => Controlflow, Dataflow => Dataflow), Op]): List[Fun] = {
+    funs.map { fun =>
+      val transformed = mutable.Map[Op, Op]()
+
+      def mapData(data: Dataflow): Dataflow = Dataflow(() => data.value.map(op => Some(transform(op))), data.idx)
+
+      def mapCtrl(ctrl: Controlflow): Controlflow = Controlflow(() => transform(ctrl.op))
+
+      def transform(op: Op): Op = transformed.getOrElse(op, transformer.applyOrElse((op, mapCtrl, mapData), {
+        case UnitLit(next) => UnitLit(mapCtrl(next))
+        case IntLit(int, next) => IntLit(int, mapCtrl(next))
+        case BoolLit(bool, next) => BoolLit(bool, mapCtrl(next))
+        case FunLit(fun, next) => FunLit(fun, mapCtrl(next))
+        case TupleLit(elements, next) => TupleLit(elements.map(mapData), mapCtrl(next))
+        case AddInt(addInts, subInts, next) => ???
+        case AndInt(ints, next) => ???
+        case OrInt(ints, next) => ???
+        case XorInt(ints, next) => ???
+        case MultInt(ints, next) => ???
+        case DivInt(dividend, divisor, next) => ???
+        case ModInt(dividend, divisor, next) => ???
+        case IsGreater(int, next) => ???
+        case IsGreaterOrZero(int, next) => ???
+        case IsZero(int, next) => ???
+        case IsNotZero(int, next) => ???
+        case Branch(condition, ifTrue, ifFalse) => ???
+        case Phi(branch, ifTrue, ifFalse, next) => ???
+        case TupleIdx(tuple, idx, next) => ???
+        case ReadRef(ref, next) => ???
+        case WriteRef(ref, data, next) => ???
+        case ReadLocal(local, next) => ???
+        case WriteLocal(local, data, next) => ???
+        case RefLocal(local, next) => ???
+        case ReadGlobal(global, idx, next) => ???
+        case WriteGlobal(global, idx, data, next) => ???
+        case RefGlobal(global, idx, next) => ???
+        case Call(fun, values, next) => ???
+        case CallInd(fun, values, next) => ???
+        case Ret(returnValues) => ???
+      }))
+
+      fun match {
+        case codeFun: CodeFun => new CodeFun(mapCtrl(codeFun.entry), codeFun.signature, codeFun.localVars)
+      }
+    }
+  }
   def format(): String = {
     val funIds: Map[Fun, Int] = funs.zipWithIndex.toMap
     val varIds: Map[Var, Int] = vars.zipWithIndex.toMap

@@ -297,7 +297,7 @@ class Module(val file: File, fileContent: => (Map[String, List[GlobalVar]], List
       lazy val (irVar: opt.Var, globalVars: List[GlobalVar]) = globalInitsMap(varInit)()
       globalVars.zipWithIndex.map { case (globalVar, index) => (globalVar, () => (irVar, index)) }
     }.concat(vars.values.flatten.collect { case builtin: BuiltinGlobalVar if builtin.datatype.runtime && builtin.constVal.nonEmpty =>
-      lazy val (constValData: opt.Dataflow, constValCtrl: opt.Controlflow) = builtin.constVal.get.generateIr(retCtrl, context)
+      lazy val (constValData: opt.Dataflow, constValCtrl: opt.Controlflow) = builtin.constVal.get.generateIr(context).toGraph(retCtrl)
       lazy val retOp: opt.Op = opt.Ret(List(constValData))
       lazy val retCtrl: opt.Controlflow = opt.Controlflow(() => retOp)
       lazy val irVar: opt.Var = opt.Var(constValCtrl, Array(builtin.datatype.optDatatype), List())
