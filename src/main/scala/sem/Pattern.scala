@@ -15,6 +15,11 @@ abstract class Pattern[T <: Var] {
     case VarPattern(patternVar, _) => s"${patternVar.name}: $datatype"
     case TuplePattern(elements, _) => s"(${elements.map(_.format(indentation)).mkString(", ")})"
   }
+
+  def gatherVars: List[T] = this match {
+    case VarPattern(patternVar, _) => List(patternVar)
+    case TuplePattern(elements, _) => elements.flatMap(_.gatherVars)
+  }
 }
 
 case class VarPattern[T <: Var](patternVar: T, range: FilePosRange) extends Pattern[T]
@@ -42,7 +47,7 @@ object Pattern {
         val variable = varConstructor(varPattern, patternNav)
         (VarPattern[T](variable, varPattern.range), List(variable))
       case syn.TuplePattern(elements, range) =>
-        val (analyzedPatterns, vars) = elements.zipWithIndex.map((pattern, index) => rec(pattern, TuplePatternNav(index, patternNav))).unzip
+        val (analyzedPatterns: List[Pattern[T]], vars: List[List[T]]) = elements.zipWithIndex.map((pattern, index) => rec(pattern, TuplePatternNav(index, patternNav))).unzip
         (TuplePattern[T](analyzedPatterns, range), vars.flatten)
     }
 
@@ -50,42 +55,31 @@ object Pattern {
   }
 
   def verify[T <: Var](vars: List[T]): Map[String, T] = {
-    val (errors, verifiedVars) = vars.groupBy(_.name).partitionMap {
+    val (errors: List[Error], verifiedVars: List[(String, T)]) = vars.groupBy(_.name).partitionMap {
       case (name, List(variable)) => Right((name, variable))
       case (name, varList) => Left(Error(Error.SEMANTIC, varList.head.range.file, varList.map(variable => ErrorComponent(variable.range)), Some(s"Duplicate variables named '$name'")))
     }
     if (errors.nonEmpty) throw ErrorGroup(errors.toList)
     verifiedVars.toMap
   }
-  
-  def generateIrLocal(pattern: Pattern[LocalVar], expr: opt.Dataflow, nextCtrl: opt.Controlflow, localVars: Map[LocalVar, Int]): opt.Controlflow = pattern match {
-    case VarPattern(patternVar, _) =>
-      lazy val writeOp: opt.Op = opt.WriteLocal(localVars(patternVar), expr, nextCtrl)
-      lazy val writeCtrl: opt.Controlflow = opt.Controlflow(() => writeOp)
-      writeCtrl
+
+  def generateIrLocal(pattern: Pattern[LocalVar], expr: opt.Data, localVars: Map[LocalVar, Int]): List[opt.Op] = pattern match {
+    case VarPattern(patternVar, _) => List(opt.WriteLocal(localVars(patternVar), expr))
     case TuplePattern(elements, _) =>
-      elements.zipWithIndex.foldRight(nextCtrl)((tuple, ctrl) => {
-        val (subPattern, index) = tuple
-        lazy val idxOp: opt.TupleIdx = opt.TupleIdx(expr, index, patternCtrl)
-        lazy val patternCtrl: opt.Controlflow = generateIrLocal(subPattern, idxData, ctrl, localVars)
-        lazy val idxCtrl: opt.Controlflow = opt.Controlflow(() => idxOp)
-        lazy val idxData: opt.Dataflow = opt.Dataflow(() => Some(idxOp))
-        idxCtrl
-      })
+      elements.zipWithIndex.flatMap { case (subPattern, idx) =>
+        val idxOp = opt.TupleIdx(expr, idx)
+        idxOp :: generateIrLocal(subPattern, opt.toData(idxOp), localVars)
+      }
   }
 
-  def generateIrGlobal(pattern: Pattern[UserGlobalVar], expr: opt.Dataflow, nextCtrl: opt.Controlflow): (opt.Controlflow, List[(GlobalVar, opt.Datatype, opt.Dataflow)]) = pattern match {
+  def generateIrGlobal(pattern: Pattern[UserGlobalVar], expr: opt.Data, context: IrGenContext): List[opt.Op] = pattern match {
     case VarPattern(patternVar, _) =>
-      (nextCtrl, List((patternVar, patternVar.datatype.optDatatype, expr)))
+      val (optVar: opt.Var, optVarIdx: Int) = context(patternVar)
+      List(opt.WriteGlobal(optVar, optVarIdx, expr))
     case TuplePattern(elements, _) =>
-      elements.zipWithIndex.foldRight((nextCtrl, List[(GlobalVar, opt.Datatype, opt.Dataflow)]()))((element, previous) => {
-        val (subPattern, index) = element
-        val (ctrl, prevData) = previous
-        lazy val idxOp: opt.TupleIdx = opt.TupleIdx(expr, index, patternCtrl)
-        lazy val (patternCtrl: opt.Controlflow, data: List[(GlobalVar, opt.Datatype, opt.Dataflow)]) = generateIrGlobal(subPattern, idxData, ctrl)
-        lazy val idxCtrl: opt.Controlflow = opt.Controlflow(() => idxOp)
-        lazy val idxData: opt.Dataflow = opt.Dataflow(() => Some(idxOp))
-        (idxCtrl, data ::: prevData)
-      })
+      elements.zipWithIndex.flatMap { case (subPattern, idx) =>
+        val idxOp = opt.TupleIdx(expr, idx)
+        idxOp :: generateIrGlobal(subPattern, opt.toData(idxOp), context)
+      }
   }
 }

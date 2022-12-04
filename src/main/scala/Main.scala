@@ -1,4 +1,4 @@
-import core.{Error, ErrorComponent, ErrorGroup, File, FilePosRange}
+import core.{CompilerError, Error, ErrorComponent, ErrorGroup, File, FilePosRange}
 import gen.AsmGen
 import lex.{LexerState, tokenize}
 import sem.analyzeFile
@@ -123,8 +123,13 @@ def parseArgs(args: List[(FilePosRange, String)], parsedArgs: ParsedArgs): Parse
     }
 
     if (parsedArgs.enabled(ParsedArgs.OPT_GRAPH)) {
+      opt.globalVarInline(optUnit)
+      opt.funExprInline(optUnit)
       printFile(filePath + ".opt_graph.txt", optUnit.format())
       Process(s"dot -Tsvg $filePath.opt_graph.txt -o $filePath.opt_graph.svg").!(ProcessLogger(_ => ()))
+      opt.deadCodeElimination(optUnit)
+      printFile(filePath + ".opt_graph_1.txt", optUnit.format())
+      Process(s"dot -Tsvg $filePath.opt_graph_1.txt -o $filePath.opt_graph_1.svg").!(ProcessLogger(_ => ()))
     }
 
     printFile(filePath + ".asm", AsmGen.toString)
@@ -135,7 +140,7 @@ def parseArgs(args: List[(FilePosRange, String)], parsedArgs: ParsedArgs): Parse
     }
   }
 } catch {
-  case error: (Error | ErrorGroup) =>
+  case error: CompilerError =>
     error.printStackTrace()
     print("\n" * 4)
     print(window("COMPILER ERROR", 1, error.toString))

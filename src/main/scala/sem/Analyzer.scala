@@ -2,35 +2,29 @@ package sem
 
 import core.*
 import gen.*
-import opt.{CodeFun, Controlflow, Dataflow}
+import opt.{CodeFun, Ctrl, Data}
 
 import scala.collection.mutable
 
-type BinGraphOp = (opt.Dataflow, opt.Dataflow, opt.Controlflow) => opt.Op
-type CompGraphOp = (opt.Dataflow, opt.Controlflow) => opt.Op
+type BinGraphOp = (opt.Data, opt.Data) => opt.Op
+type CompGraphOp = opt.Data => opt.Op
 
 def binaryOperatorGraph(graphOp: BinGraphOp, params: List[opt.Datatype], returnType: opt.Datatype): Option[opt.Fun] = {
-  lazy val op: opt.Op = graphOp(opt.Dataflow(() => None), opt.Dataflow(() => None, 1), retCtrl)
-  lazy val opCtrl: opt.Controlflow = opt.Controlflow(() => op)
-  lazy val opData: opt.Dataflow = opt.Dataflow(() => Some(op))
+  val op = graphOp((None, 0), (None, 1))
+  val retOp = opt.Ret(List((Some(op), 0)))
+  op.next = retOp
 
-  lazy val retOp: opt.Op = opt.Ret(List(opData))
-  lazy val retCtrl: opt.Controlflow = opt.Controlflow(() => retOp)
-  Some(new CodeFun(opCtrl, opt.FunDatatype(params, List(returnType)), List()))
+  Some(new CodeFun(op, opt.FunDatatype(params, List(returnType)), List()))
 }
 
 def compOperatorGraph(graphOp: CompGraphOp, swapped: Boolean, params: List[opt.Datatype], returnType: opt.Datatype): Option[opt.Fun] = {
-  lazy val subOp: opt.Op = opt.AddInt(List(opt.Dataflow(() => None, if swapped then 1 else 0)), List(opt.Dataflow(() => None, if swapped then 0 else 1)), opCtrl)
-  lazy val subOpCtrl: opt.Controlflow = opt.Controlflow(() => subOp)
-  lazy val subOpData: opt.Dataflow = opt.Dataflow(() => Some(subOp))
+  val subOp = opt.AddInt(List((None, if swapped then 1 else 0)), List((None, if swapped then 0 else 1)))
+  val op = graphOp((Some(subOp), 0))
+  val retOp = opt.Ret(List((Some(op), 0)))
+  subOp.next = op
+  op.next = retOp
 
-  lazy val op: opt.Op = graphOp(subOpData, retCtrl)
-  lazy val opCtrl: opt.Controlflow = opt.Controlflow(() => op)
-  lazy val opData: opt.Dataflow = opt.Dataflow(() => Some(op))
-
-  lazy val retOp: opt.Op = opt.Ret(List(opData))
-  lazy val retCtrl: opt.Controlflow = opt.Controlflow(() => retOp)
-  Some(new CodeFun(subOpCtrl, opt.FunDatatype(params, List(returnType)), List()))
+  Some(new CodeFun(subOp, opt.FunDatatype(params, List(returnType)), List()))
 }
 
 def simpleOperator(module: => Module, name: String, compileTimeFunction: (Long, Long) => Long, asmOperation: (Address, Reg) => SimpleOpMem, graphOp: BinGraphOp): BuiltinGlobalVar =
@@ -61,7 +55,7 @@ def mulOperator(module: => Module): BuiltinGlobalVar =
       Store(Address(Reg.RBP), Reg.RAX),
       Ret()
     ),
-    binaryOperatorGraph((data1, data2, nextCtrl) => opt.MultInt(List(data1, data2), nextCtrl), List(opt.IntDatatype, opt.IntDatatype), opt.IntDatatype),
+    binaryOperatorGraph((data1, data2) => opt.MultInt(List(data1, data2)), List(opt.IntDatatype, opt.IntDatatype), opt.IntDatatype),
     ctx => {
       ctx.add(
         Load(Reg.RAX, Reg.RBP + ctx.secondaryOffset),
@@ -124,22 +118,22 @@ def builtinVars(module: => Module): List[GlobalVar] = List(
   new BuiltinGlobalVar(module, "Bool", ConstType(BoolDatatype(false))),
   new BuiltinGlobalVar(module, "Type", ConstType(TypeDatatype(false))),
 
-  simpleOperator(module, "+", _ + _, Add.apply, (data1, data2, nextCtrl) => opt.AddInt(List(data1, data2), List(), nextCtrl)),
-  simpleOperator(module, "-", _ - _, Sub.apply, (data1, data2, nextCtrl) => opt.AddInt(List(data1), List(data2), nextCtrl)),
-  simpleOperator(module, "&", _ & _, And.apply, (data1, data2, nextCtrl) => opt.AndInt(List(data1, data2), nextCtrl)),
-  simpleOperator(module, "|", _ | _, Or.apply, (data1, data2, nextCtrl) => opt.OrInt(List(data1, data2), nextCtrl)),
-  simpleOperator(module, "^", _ ^ _, Xor.apply, (data1, data2, nextCtrl) => opt.XorInt(List(data1, data2), nextCtrl)),
+  simpleOperator(module, "+", _ + _, Add.apply, (data1, data2) => opt.AddInt(List(data1, data2), List())),
+  simpleOperator(module, "-", _ - _, Sub.apply, (data1, data2) => opt.AddInt(List(data1), List(data2))),
+  simpleOperator(module, "&", _ & _, And.apply, (data1, data2) => opt.AndInt(List(data1, data2))),
+  simpleOperator(module, "|", _ | _, Or.apply, (data1, data2) => opt.OrInt(List(data1, data2))),
+  simpleOperator(module, "^", _ ^ _, Xor.apply, (data1, data2) => opt.XorInt(List(data1, data2))),
 
   mulOperator(module),
-  divOperator(module, "/", _ / _, Reg.RAX, (data1, data2, nextCtrl) => opt.DivInt(data1, data2, nextCtrl)),
-  divOperator(module, "%", _ % _, Reg.RDX, (data1, data2, nextCtrl) => opt.ModInt(data1, data2, nextCtrl)),
-  
-  comparisonOperator(module, ">", _ > _, Flag.Greater, false, (data, nextCtrl) => opt.IsGreater(data, nextCtrl)),
-  comparisonOperator(module, "<", _ < _, Flag.Less, true, (data, nextCtrl) => opt.IsGreater(data, nextCtrl)),
-  comparisonOperator(module, ">=", _ >= _, Flag.GreaterOrEqual, false, (data, nextCtrl) => opt.IsGreaterOrZero(data, nextCtrl)),
-  comparisonOperator(module, "<=", _ <= _, Flag.LessOrEqual, true, (data, nextCtrl) => opt.IsGreaterOrZero(data, nextCtrl)),
-  comparisonOperator(module, "==", _ == _, Flag.Zero, false, (data, nextCtrl) => opt.IsZero(data, nextCtrl)),
-  comparisonOperator(module, "!=", _ != _, Flag.NotZero, false, (data, nextCtrl) => opt.IsNotZero(data, nextCtrl)),
+  divOperator(module, "/", _ / _, Reg.RAX, (data1, data2) => opt.DivInt(data1, data2)),
+  divOperator(module, "%", _ % _, Reg.RDX, (data1, data2) => opt.ModInt(data1, data2)),
+
+  comparisonOperator(module, ">", _ > _, Flag.Greater, false, data => opt.IsGreater(data)),
+  comparisonOperator(module, "<", _ < _, Flag.Less, true, data => opt.IsGreater(data)),
+  comparisonOperator(module, ">=", _ >= _, Flag.GreaterOrEqual, false, data => opt.IsGreaterOrZero(data)),
+  comparisonOperator(module, "<=", _ <= _, Flag.LessOrEqual, true, data => opt.IsGreaterOrZero(data)),
+  comparisonOperator(module, "==", _ == _, Flag.Zero, false, data => opt.IsZero(data)),
+  comparisonOperator(module, "!=", _ != _, Flag.NotZero, false, data => opt.IsNotZero(data)),
 
   new BuiltinGlobalVar(module, "println", ConstFunction(new BuiltinFun(module, List(IntDatatype(false)), UnitDatatype(false),
     None,

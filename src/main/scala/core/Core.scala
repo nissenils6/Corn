@@ -22,11 +22,15 @@ case class ErrorComponent(range: FilePosRange, message: Option[String] = None) {
   override def toString: String = range.underline('-', message)
 }
 
-case class Error(errorType: String, file: File, components: List[ErrorComponent], message: Option[String] = None) extends Exception {
+abstract class CompilerError extends Exception {
+  
+}
+
+case class Error(errorType: String, file: File, components: List[ErrorComponent], message: Option[String] = None) extends CompilerError {
   override def toString: String = s"$errorType error in '${file.name}':${message.map(message => s" $message:").getOrElse("")}\n\n${components.mkString("\n\n")}\n\n"
 }
 
-case class ErrorGroup(errors: List[Error]) extends Exception {
+case class ErrorGroup(errors: List[Error]) extends CompilerError {
   override def toString: String = errors.mkString("\n")
 }
 
@@ -135,15 +139,5 @@ case class FilePosRange(start: Int, end: Int, file: File) {
       case Some(message) => s"$content\n${" " * lineNumberSpace}| $message"
       case None => content
     }
-  }
-}
-
-class Counter(var count: Int = 0) {
-  var localVars = List[opt.Datatype]()
-  def next(localVar: LocalVar): Int = {
-    val number = count
-    localVars = localVar.datatype.optDatatype :: localVars
-    count += 1
-    number
   }
 }

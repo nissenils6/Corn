@@ -2,7 +2,6 @@ package sem
 
 import core.*
 import gen.*
-import opt.{Controlflow, Dataflow}
 import syn.AssignExpr
 
 import scala.annotation.tailrec
@@ -27,8 +26,8 @@ abstract class Expr() {
     case TupleExpr(elements, _, _) => TupleDatatype(elements.map(_.returnType), false)
     case BlockExpr(_, lastExpr, _, _, _) => lastExpr.returnType
     case UnitExpr(_, _) => UnitDatatype(false)
-    case LetExpr(_, expr, _, _) => expr.returnType
-    case AssignExpr(_, expr, _, _) => expr.returnType
+    case LetExpr(_, expr, _, _) => UnitDatatype(false)
+    case AssignExpr(_, expr, _, _) => UnitDatatype(false)
     case FunExpr(fun, _, _) => fun.signature
     case FunTypeExpr(_, _, _, _) => TypeDatatype(false)
     case RefTypeExpr(_, _, _) => TypeDatatype(false)
@@ -353,125 +352,88 @@ abstract class Expr() {
     case MutExpr(_, _, _, range) => Error.internal("", range)
   }
 
-  def generateIr(nextCtrl: opt.Controlflow, context: IrGenContext, localVars: Map[LocalVar, Int]): (opt.Dataflow, opt.Controlflow) = this match {
+  def generateIr(context: IrGenContext, localVars: Map[LocalVar, Int]): (opt.Op, opt.Op) = this match {
     case CallExpr(function, args, _, _) =>
-      lazy val (fnExprData: opt.Dataflow, fnExprCtrl: opt.Controlflow) = function.generateIr(argsCtrl, context, localVars)
-      lazy val (argsCtrl: opt.Controlflow, argsData: List[opt.Dataflow]) = args.foldRight((callCtrl, List[opt.Dataflow]()))((arg, tuple) => {
-        val (ctrl, argsData) = tuple
-        lazy val (argData: opt.Dataflow, argCtrl: opt.Controlflow) = arg.generateIr(ctrl, context, localVars)
-        (argCtrl, argData :: argsData)
-      })
-      lazy val callOp: opt.Op = opt.CallInd(fnExprData, argsData, nextCtrl)
-
-      lazy val callData: opt.Dataflow = opt.Dataflow(() => Some(callOp))
-      lazy val callCtrl: opt.Controlflow = opt.Controlflow(() => callOp)
-      (callData, fnExprCtrl)
+      val (firstFunctionOp, lastFunctionOp) = function.generateIr(context, localVars)
+      val argOps = args.map(_.generateIr(context, localVars))
+      val callOp = opt.Call(Right(opt.toData(lastFunctionOp)), argOps.map(_._2).map(opt.toData))
+      val firstArgOp = opt.linkOpSections(callOp)(argOps)
+      firstFunctionOp.next = firstArgOp
+      (firstFunctionOp, callOp)
     case GlobalVarExpr(globalVar, _, _) =>
-      lazy val (optVar: opt.Var, index: Int) = context(globalVar)
-      lazy val globalOp: opt.Op = opt.ReadGlobal(() => optVar, index, nextCtrl)
-      lazy val globalData: opt.Dataflow = opt.Dataflow(() => Some(globalOp))
-      lazy val globalCtrl: opt.Controlflow = opt.Controlflow(() => globalOp)
-      (globalData, globalCtrl)
+      val (optVar: opt.Var, optVarIdx: Int) = context(globalVar)
+      opt.toPair(opt.ReadGlobal(optVar, optVarIdx))
     case RefGlobalVarExpr(globalVar, _, _) =>
-      lazy val (optVar: opt.Var, index: Int) = context(globalVar)
-      lazy val globalOp: opt.Op = opt.RefGlobal(() => optVar, index, nextCtrl)
-      lazy val globalData: opt.Dataflow = opt.Dataflow(() => Some(globalOp))
-      lazy val globalCtrl: opt.Controlflow = opt.Controlflow(() => globalOp)
-      (globalData, globalCtrl)
-    case LocalVarExpr(localVar, _, _) =>
-      lazy val localOp: opt.Op = opt.ReadLocal(localVars(localVar), nextCtrl)
-      lazy val localData: opt.Dataflow = opt.Dataflow(() => Some(localOp))
-      lazy val localCtrl: opt.Controlflow = opt.Controlflow(() => localOp)
-      (localData, localCtrl)
-    case RefLocalVarExpr(localVar, _, _) =>
-      lazy val localOp: opt.Op = opt.RefLocal(localVars(localVar), nextCtrl)
-      lazy val localData: opt.Dataflow = opt.Dataflow(() => Some(localOp))
-      lazy val localCtrl: opt.Controlflow = opt.Controlflow(() => localOp)
-      (localData, localCtrl)
+      val (optVar: opt.Var, optVarIdx: Int) = context(globalVar)
+      opt.toPair(opt.RefGlobal(optVar, optVarIdx))
+    case LocalVarExpr(localVar, _, _) => opt.toPair(opt.ReadLocal(localVars(localVar)))
+    case RefLocalVarExpr(localVar, _, _) => opt.toPair(opt.RefLocal(localVars(localVar)))
     case ValExpr(expr, _, _) =>
-      lazy val (exprData: opt.Dataflow, exprCtrl: opt.Controlflow) = expr.generateIr(refCtrl, context, localVars)
-
-      lazy val refOp: opt.Op = opt.ReadRef(exprData, nextCtrl)
-      lazy val refData: opt.Dataflow = opt.Dataflow(() => Some(refOp))
-      lazy val refCtrl: opt.Controlflow = opt.Controlflow(() => refOp)
-      (refData, exprCtrl)
-    case IntExpr(int, _, _) =>
-      lazy val intOp: opt.Op = opt.IntLit(int, nextCtrl)
-      lazy val intData: opt.Dataflow = opt.Dataflow(() => Some(intOp))
-      lazy val intCtrl: opt.Controlflow = opt.Controlflow(() => intOp)
-      (intData, intCtrl)
-    case BoolExpr(bool, _, _) =>
-      lazy val boolOp: opt.Op = opt.BoolLit(bool, nextCtrl)
-      lazy val boolData: opt.Dataflow = opt.Dataflow(() => Some(boolOp))
-      lazy val boolCtrl: opt.Controlflow = opt.Controlflow(() => boolOp)
-      (boolData, boolCtrl)
+      val (firstExprOp, lastExprOp) = expr.generateIr(context, localVars)
+      val readOp = opt.ReadRef(opt.toData(lastExprOp))
+      lastExprOp.next = readOp
+      (firstExprOp, readOp)
+    case IntExpr(int, _, _) => opt.toPair(opt.IntLit(int))
+    case BoolExpr(bool, _, _) => opt.toPair(opt.BoolLit(bool))
     case TupleExpr(elements, _, _) =>
-      lazy val (elementsCtrl: opt.Controlflow, elementsData: List[opt.Dataflow]) = elements.foldRight((tupleCtrl, List[opt.Dataflow]()))((expr, tuple) => {
-        lazy val (next, dataflows) = tuple
-        lazy val (exprData: opt.Dataflow, exprCtrl: opt.Controlflow) = expr.generateIr(next, context, localVars)
-        (exprCtrl, exprData :: dataflows)
-      })
-
-      lazy val tupleOp: opt.Op = opt.TupleLit(elementsData, nextCtrl)
-      lazy val tupleData: opt.Dataflow = opt.Dataflow(() => Some(tupleOp))
-      lazy val tupleCtrl: opt.Controlflow = opt.Controlflow(() => tupleOp)
-      (tupleData, elementsCtrl)
-    case BlockExpr(exprs, lastExpr, vars, _, _) =>
-      lazy val exprsCtrl: opt.Controlflow = exprs.foldRight(lastExprCtrl)((expr, ctrl) => expr.generateIr(ctrl, context, localVars)._2)
-      lazy val (lastExprData: opt.Dataflow, lastExprCtrl: opt.Controlflow) = lastExpr.generateIr(nextCtrl, context, localVars)
-      (lastExprData, exprsCtrl)
-    case UnitExpr(_, _) =>
-      lazy val unitOp: opt.Op = opt.UnitLit(nextCtrl)
-      lazy val unitData: opt.Dataflow = opt.Dataflow(() => Some(unitOp))
-      lazy val unitCtrl: opt.Controlflow = opt.Controlflow(() => unitOp)
-      (unitData, unitCtrl)
+      val elementOps = elements.map(_.generateIr(context, localVars))
+      val tupleOp = opt.TupleLit(elementOps.map(_._2).map(opt.toData))
+      val firstElementOp = opt.linkOpSections(tupleOp)(elementOps)
+      (firstElementOp, tupleOp)
+    case BlockExpr(exprs, lastExpr, _, _, _) =>
+      val exprOps = exprs.map(_.generateIr(context, localVars))
+      val (firstRetExprOp, lastRetExprOp) = lastExpr.generateIr(context, localVars)
+      val firstExprOp = opt.linkOpSections(firstRetExprOp)(exprOps)
+      (firstExprOp, lastRetExprOp)
+    case UnitExpr(_, _) => opt.toPair(opt.UnitLit())
     case LetExpr(pattern, expr, _, _) =>
-      lazy val (exprData: opt.Dataflow, exprCtrl: opt.Controlflow) = expr.generateIr(unitCtrl, context, localVars)
+      val (firstExprOp, lastExprOp) = expr.generateIr(context, localVars)
+      val patternOps = Pattern.generateIrLocal(pattern, opt.toData(lastExprOp), localVars)
+      val unitOp = opt.UnitLit()
+      val firstPatternOp = opt.linkOps(unitOp)(patternOps)
 
-      lazy val unitOp: opt.Op = opt.UnitLit(patternCtrl)
-      lazy val unitCtrl: opt.Controlflow = opt.Controlflow(() => unitOp)
+      lastExprOp.next = firstPatternOp
 
-      lazy val patternCtrl: opt.Controlflow = Pattern.generateIrLocal(pattern, exprData, nextCtrl, localVars)
-      (exprData, exprCtrl)
+      (firstExprOp, unitOp)
     case AssignExpr(LocalVarExpr(localVar, _, _), expr, _, _) =>
-      lazy val (exprData: opt.Dataflow, exprCtrl: opt.Controlflow) = expr.generateIr(writeCtrl, context, localVars)
+      val (firstExprOp, lastExprOp) = expr.generateIr(context, localVars)
+      val writeOp = opt.WriteLocal(localVars(localVar), opt.toData(lastExprOp))
 
-      lazy val writeOp: opt.Op = opt.WriteLocal(localVars(localVar), exprData, nextCtrl)
-      lazy val writeCtrl: opt.Controlflow = opt.Controlflow(() => writeOp)
-      (exprData, exprCtrl)
+      lastExprOp.next = writeOp
+
+      (firstExprOp, writeOp)
     case AssignExpr(GlobalVarExpr(globalVar, _, _), expr, _, _) =>
-      lazy val (exprData: opt.Dataflow, exprCtrl: opt.Controlflow) = expr.generateIr(writeCtrl, context, localVars)
+      val (firstExprOp, lastExprOp) = expr.generateIr(context, localVars)
+      val (optVar: opt.Var, optVarIdx: Int) = context(globalVar)
+      val writeOp = opt.WriteGlobal(optVar, optVarIdx, opt.toData(lastExprOp))
 
-      lazy val (global, index) = context(globalVar)
-      lazy val writeOp: opt.Op = opt.WriteGlobal(() => global, index, exprData, nextCtrl)
-      lazy val writeCtrl: opt.Controlflow = opt.Controlflow(() => writeOp)
-      (exprData, exprCtrl)
+      lastExprOp.next = writeOp
+
+      (firstExprOp, writeOp)
     case AssignExpr(ValExpr(refExpr, _, _), expr, _, _) =>
-      lazy val (refExprData: opt.Dataflow, refExprCtrl: opt.Controlflow) = refExpr.generateIr(exprCtrl, context, localVars)
-      lazy val (exprData: opt.Dataflow, exprCtrl: opt.Controlflow) = expr.generateIr(writeCtrl, context, localVars)
+      val (firstRefExprOp, lastRefExprOp) = refExpr.generateIr(context, localVars)
+      val (firstExprOp, lastExprOp) = expr.generateIr(context, localVars)
+      val writeOp = opt.WriteRef(opt.toData(lastRefExprOp), opt.toData(lastExprOp))
 
-      lazy val writeOp: opt.Op = opt.WriteRef(refExprData, exprData, nextCtrl)
-      lazy val writeCtrl: opt.Controlflow = opt.Controlflow(() => writeOp)
-      (exprData, refExprCtrl)
-    case FunExpr(fun, _, _) =>
-      lazy val funOp: opt.Op = opt.FunLit(() => context(fun), nextCtrl)
-      lazy val funData: opt.Dataflow = opt.Dataflow(() => Some(funOp))
-      lazy val funCtrl: opt.Controlflow = opt.Controlflow(() => funOp)
-      (funData, funCtrl)
+      lastRefExprOp.next = firstExprOp
+      lastExprOp.next = writeOp
+
+      (firstRefExprOp, writeOp)
+    case FunExpr(fun, _, _) => opt.toPair(opt.FunLit(context(fun)))
     case IfExpr(condition, ifBlock, elseBlock, _, _) =>
-      lazy val (conditionData: opt.Dataflow, conditionCtrl: opt.Controlflow) = condition.generateIr(branchCtrl, context, localVars)
+      val (firstConditionOp, lastConditionOp) = condition.generateIr(context, localVars)
+      val branchOp = opt.Branch(opt.toData(lastConditionOp))
+      val (firstIfOp, lastIfOp) = ifBlock.generateIr(context, localVars)
+      val (firstElseOp, lastElseOp) = elseBlock.generateIr(context, localVars)
+      val phiOp = opt.Phi(branchOp, opt.toData(lastIfOp), opt.toData(lastElseOp))
 
-      lazy val branchOp: opt.Branch = opt.Branch(conditionData, ifCtrl, elseCtrl)
-      lazy val branchCtrl: opt.Controlflow = opt.Controlflow(() => branchOp)
+      lastConditionOp.next = branchOp
+      branchOp.next = firstIfOp
+      branchOp.elseNext = firstElseOp
+      lastIfOp.next = phiOp
+      lastElseOp.next = phiOp
 
-      lazy val (ifData: opt.Dataflow, ifCtrl: opt.Controlflow) = ifBlock.generateIr(phiCtrl, context, localVars)
-      lazy val (elseData: opt.Dataflow, elseCtrl: opt.Controlflow) = elseBlock.generateIr(phiCtrl, context, localVars)
-
-      lazy val phiOp: opt.Phi = opt.Phi(branchOp, ifData, elseData, nextCtrl)
-      lazy val phiData: opt.Dataflow = opt.Dataflow(() => Some(phiOp))
-      lazy val phiCtrl: opt.Controlflow = opt.Controlflow(() => phiOp)
-
-      (phiData, conditionCtrl)
+      (firstConditionOp, phiOp)
     case expr: Expr => throw Error.internal(s"Attempt to generate ir from compile time expression (this is bug in the semantic analyzer)", expr.range)
   }
 

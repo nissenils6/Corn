@@ -2,7 +2,7 @@ package sem
 
 import core.*
 import gen.*
-import opt.BssElement
+import opt.{BssElement, CodeFun}
 
 import scala.collection.mutable
 
@@ -43,22 +43,25 @@ class UserGlobalVar(module: => Module, val name: String, init: => UserGlobalVarI
   lazy val datatype: Datatype = typeExpr.map(typeExpr => analyzeExpr(ExprParsingContext(module, None))(typeExpr).constDatatype).getOrElse(patternNav.datatype(init.analyzedExpr.returnType).withMut(false))
   lazy val constVal: Option[ConstVal] = if datatype.mutable then None else init.analyzedExpr.constVal.map(patternNav.const)
 
-  lazy val runtime: Boolean = datatype.runtime && init.analyzedExpr.runtime
+  lazy val runtime: Boolean = init.runtime
 
-  lazy val compiletime: Boolean = init.analyzedExpr.compiletime
+  lazy val compiletime: Boolean = init.compiletime
 }
 
 class UserGlobalVarInit(module: => Module, expr: syn.Expr, pattern: => Pattern[UserGlobalVar]) {
   lazy val analyzedExpr: Expr = analyzeExpr(ExprParsingContext(module, None))(expr)
   lazy val analyzedPattern: Pattern[UserGlobalVar] = pattern
 
-  def generateIr(context: IrGenContext): (opt.Var, List[GlobalVar]) = {
+  def generateIr(globalVar: opt.Var, context: IrGenContext): Unit = {
     val localVars = analyzedExpr.gatherLocals
-    lazy val (exprData: opt.Dataflow, exprCtrl: opt.Controlflow) = analyzedExpr.generateIr(opt.Controlflow(() => patternCtrl.op), context, localVars.zipWithIndex.toMap)
-    lazy val (patternCtrl: opt.Controlflow, data: List[(GlobalVar, opt.Datatype, opt.Dataflow)]) = Pattern.generateIrGlobal(analyzedPattern, exprData, retCtrl)
-    lazy val retOp = opt.Ret(data.map(_._3))
-    lazy val retCtrl = opt.Controlflow(() => retOp)
-    (opt.Var(exprCtrl, data.map(_._2).toArray, localVars.map(_.datatype.optDatatype)), data.map(_._1))
+    val (firstExprOp: opt.Op, lastExprOp: opt.Op) = analyzedExpr.generateIr(context, localVars.zipWithIndex.toMap)
+    val patternOps = Pattern.generateIrGlobal(analyzedPattern, opt.toData(lastExprOp), context)
+    val retOp = opt.Ret(List())
+    val firstPatternOp = opt.linkOps(retOp)(patternOps)
+
+    lastExprOp.next = firstPatternOp
+    globalVar.entry = firstExprOp
+    globalVar.localVars = localVars.map(_.datatype.optDatatype)
   }
 
   def gatherFuns(funs: mutable.Set[Fun]): Unit = analyzedExpr.gatherFuns(funs)
@@ -88,8 +91,6 @@ abstract class Fun {
   def generateCode(): List[Instr]
 
   def generateInlineCode(ctx: ExprCodeGenContext): Boolean
-
-  def generateIr(context: IrGenContext): opt.Fun
 
   def runtime: Boolean
 
@@ -122,7 +123,7 @@ class BuiltinFun(val module: Module, val argTypes: List[Datatype], val returnTyp
 
   override def generateInlineCode(ctx: ExprCodeGenContext): Boolean = inlineGenerate(ctx)
 
-  override def generateIr(context: IrGenContext): opt.Fun = graph.get
+  def generateIr: opt.Fun = graph.get
 
   lazy val runtime: Boolean = signature.runtime && graph.nonEmpty
 
@@ -183,17 +184,21 @@ class UserFun(val module: Module, parameters: List[syn.Pattern], retTypeExpr: Op
 
   override def generateInlineCode(ctx: ExprCodeGenContext): Boolean = false
 
-  override def generateIr(context: IrGenContext): opt.Fun = {
+  def generateIr(fun: opt.CodeFun, context: IrGenContext): Unit = {
     val localVarsList = analyzedExpr.gatherLocals.concat(params.values)
     val localVars = localVarsList.zipWithIndex.toMap
-    lazy val patternCtrl: opt.Controlflow = args.zipWithIndex.foldRight(exprCtrl)((tuple, next) => {
-      val (pattern, index) = tuple
-      Pattern.generateIrLocal(pattern, opt.Dataflow(() => None, index), next, localVars)
-    })
-    lazy val (exprData: opt.Dataflow, exprCtrl: opt.Controlflow) = analyzedExpr.generateIr(retCtrl, context, localVars)
-    lazy val retOp = opt.Ret(List(exprData))
-    lazy val retCtrl = opt.Controlflow(() => retOp)
-    opt.CodeFun(patternCtrl, signature.optDatatype.asInstanceOf[opt.FunDatatype], localVarsList.map(_.datatype.optDatatype))
+    val paramOps = args.zipWithIndex.flatMap { case (pattern, index) =>
+      Pattern.generateIrLocal(pattern, (None, index), localVars)
+    }
+    val (firstExprOp: opt.Op, lastExprOp: opt.Op) = analyzedExpr.generateIr(context, localVars)
+    val retOp = opt.Ret(List(opt.toData(lastExprOp)))
+    val firstParamOp = opt.linkOps(firstExprOp)(paramOps)
+
+    lastExprOp.next = retOp
+
+    fun.entry = firstParamOp
+    fun.localVars = localVarsList.map(_.datatype.optDatatype)
+    fun.signature = signature.optDatatype.asInstanceOf[opt.FunDatatype]
   }
 
   lazy val runtime: Boolean = signature.runtime && analyzedExpr.runtime
@@ -267,10 +272,10 @@ object IrGenBuiltin {
   val staticData: opt.StaticData = opt.StaticData(bssSection, constSection, dataSection, windowsFunctions)
 }
 
-case class IrGenContext(funs: () => Map[Fun, () => opt.Fun], globalVars: () => Map[GlobalVar, () => (opt.Var, Int)]) {
-  def apply(fun: Fun): opt.Fun = funs()(fun)()
-  
-  def apply(globalVar: GlobalVar): (opt.Var, Int) = globalVars()(globalVar)()
+case class IrGenContext(funs: Map[Fun, opt.Fun], globalVars: Map[GlobalVar, (opt.Var, Int)]) {
+  def apply(fun: Fun): opt.Fun = funs(fun)
+
+  def apply(globalVar: GlobalVar): (opt.Var, Int) = globalVars(globalVar)
 }
 
 class Module(val file: File, fileContent: => (Map[String, List[GlobalVar]], List[UserGlobalVarInit])) {
@@ -288,39 +293,60 @@ class Module(val file: File, fileContent: => (Map[String, List[GlobalVar]], List
   }
 
   def generateIr(): opt.OptUnit = {
-    lazy val globalInitsMap = varInits.map { varInit =>
-      lazy val (irVar: opt.Var, globalVars: List[GlobalVar]) = varInit.generateIr(context)
-      (varInit, () => (irVar, globalVars))
-    }.toMap
+    val funs = mutable.Set[Fun]()
+    val (optVars: List[(UserGlobalVarInit, opt.Var)], globalVars: List[List[(GlobalVar, (opt.Var, Int))]]) = varInits.map { varInit =>
+      val optVar = new opt.Var()
+      varInit.gatherFuns(funs)
 
-    lazy val globalVarsMap = varInits.flatMap { varInit =>
-      lazy val (irVar: opt.Var, globalVars: List[GlobalVar]) = globalInitsMap(varInit)()
-      globalVars.zipWithIndex.map { case (globalVar, index) => (globalVar, () => (irVar, index)) }
-    }.concat(vars.values.flatten.collect { case builtin: BuiltinGlobalVar if builtin.datatype.runtime && builtin.constVal.nonEmpty =>
-      lazy val (constValData: opt.Dataflow, constValCtrl: opt.Controlflow) = builtin.constVal.get.generateIr(context).toGraph(retCtrl)
-      lazy val retOp: opt.Op = opt.Ret(List(constValData))
-      lazy val retCtrl: opt.Controlflow = opt.Controlflow(() => retOp)
-      lazy val irVar: opt.Var = opt.Var(constValCtrl, Array(builtin.datatype.optDatatype), List())
-      (builtin, () => (irVar, 0))
-    }).toMap
-
-    lazy val funsMap = {
-      val funs = mutable.Set[Fun]()
-      varInits.foreach(_.gatherFuns(funs))
-      vars.values.flatten.foreach {
-        case builtin: BuiltinGlobalVar => builtin.constVal.foreach(_.gatherFuns(funs))
-        case _ => ()
+      val t1 = (varInit, optVar)
+      val t2 = varInit.analyzedPattern.gatherVars.zipWithIndex.map { case (globalVar, index) =>
+        (globalVar, (optVar, index))
       }
-      funs.map { fun =>
-        lazy val irFun: opt.Fun = fun.generateIr(context)
-        (fun, () => irFun)
-      }.toMap
+
+      (t1, t2)
+    }.unzip
+
+    for (v <- vars.values.flatten) v match {
+      case builtin: BuiltinGlobalVar => builtin.constVal.get.gatherFuns(funs)
+      case _ => ()
     }
 
-    lazy val context: IrGenContext = IrGenContext(() => funsMap, () => globalVarsMap)
+    val codeFuns = funs.map {
+      case userFun: UserFun =>
+        val codeFun = new CodeFun()
+        (userFun, codeFun)
+      case builtinFun: BuiltinFun =>
+        (builtinFun, builtinFun.generateIr)
+    }
+    val funsMap = codeFuns.toMap
 
-    val varNodes = globalVarsMap.values.map(_.apply()._1).toList
-    val funNodes = funsMap.values.map(_.apply()).toList
-    opt.OptUnit(funNodes, varNodes, IrGenBuiltin.staticData)
+    val builtinVars: List[(BuiltinGlobalVar, (opt.Var, Int))] = vars.values.flatten.collect { case builtin: BuiltinGlobalVar if builtin.datatype.runtime && builtin.constVal.nonEmpty =>
+      val optVar = new opt.Var()
+      val (firstConstOp: opt.Op, lastConstOp: opt.Op) = builtin.constVal.get.generateIr(funsMap).toGraph
+      val writeOp = opt.WriteGlobal(optVar, 0, opt.toData(lastConstOp))
+      val retOp = opt.Ret(List())
+
+      lastConstOp.next = writeOp
+      writeOp.next = retOp
+
+      optVar.entry = firstConstOp
+      optVar.localVars = List()
+
+      (builtin, (optVar, 0))
+    }.toList
+
+    val globalVarsMap = globalVars.flatten.concat(builtinVars).toMap
+    val context = IrGenContext(funsMap, globalVarsMap)
+
+    optVars.foreach { case (varInit, optVar) =>
+      varInit.generateIr(optVar, context)
+    }
+
+    for (t <- codeFuns) t match {
+      case (userFun: UserFun, codeFun: CodeFun) => userFun.generateIr(codeFun, context)
+      case _ => ()
+    }
+
+    opt.OptUnit(funsMap.values.toList, optVars.map(_._2).concat(builtinVars.map(_._2._1)), IrGenBuiltin.staticData)
   }
 }
