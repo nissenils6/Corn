@@ -6,10 +6,10 @@ import scala.compiletime.ops.int
 
 object ConstExpr {
   def unapply(data: Data): Option[ConstVal] = data match {
-    case (Some(UnitLit()), 0) => Some(ConstUnit)
-    case (Some(IntLit(int)), 0) => Some(ConstInt(int))
-    case (Some(BoolLit(bool)), 0) => Some(ConstBool(bool))
-    case (Some(FunLit(fun)), 0) => Some(ConstFun(fun))
+    case Data(Some(UnitLit()), 0) => Some(ConstUnit)
+    case Data(Some(IntLit(int)), 0) => Some(ConstInt(int))
+    case Data(Some(BoolLit(bool)), 0) => Some(ConstBool(bool))
+    case Data(Some(FunLit(fun)), 0) => Some(ConstFun(fun))
     case _ => None
   }
 }
@@ -50,25 +50,9 @@ object NodeVisitorUnit {
   def apply(): NodeVisitorUnit = new NodeVisitorUnit()
 }
 
-class Effect {
-  var effect = false
+def mapDataflow(dataflowMap: mutable.Map[Data, Data])(data: Data): Data = dataflowMap.getOrElse(data, data)
 
-  def apply[T](e: => T): T = {
-    effect = true
-    e
-  }
-}
-
-object Effect {
-  def apply(): Effect = new Effect()
-}
-
-def mapDataflow(dataflowMap: mutable.Map[Long, Op])(data: Data): Data = data match {
-  case (Some(op), 0) => (Some(dataflowMap.getOrElse(op.id, op)), 0)
-  case _ => data
-}
-
-def replaceDataflow(visit: NodeVisitorUnit, dataflowMap: mutable.Map[Long, Op], op: Op): Unit = visit(op) {
+def replaceDataflow(visit: NodeVisitorUnit, dataflowMap: mutable.Map[Data, Data], op: Op): Unit = visit(op) {
   case tupleLit@TupleLit(elements) =>
     tupleLit.elements = elements.map(mapDataflow(dataflowMap))
     replaceDataflow(visit, dataflowMap, op.next)
@@ -143,13 +127,11 @@ def replaceDataflow(visit: NodeVisitorUnit, dataflowMap: mutable.Map[Long, Op], 
 
 def isPure(op: Op): Boolean = op match {
   case UnitLit() | IntLit(_) | BoolLit(_) | FunLit(_) | TupleLit(_) | AddInt(_, _) | AndInt(_) | OrInt(_) | XorInt(_) | MultInt(_) | DivInt(_, _) | ModInt(_, _)
-       | IsGreater(_) | IsGreaterOrZero(_) | IsZero(_) | IsNotZero(_) | TupleIdx(_, _) | ReadRef(_) | ReadLocal(_) | RefLocal(_) | ReadGlobal(_, _) | RefGlobal(_, _) => true
+       | IsGreater(_) | IsGreaterOrZero(_) | IsZero(_) | IsNotZero(_) | TupleIdx(_, _) | ReadRef(_) | RefValue(_) | ReadLocal(_) | RefLocal(_) | ReadGlobal(_, _) | RefGlobal(_, _) => true
   case Branch(_, _) | Phi(_, _, _) | WriteRef(_, _) | WriteLocal(_, _) | WriteGlobal(_, _, _) | Call(_, _) | Ret(_) => false
 }
 
 def globalVarInline(optUnit: OptUnit): Boolean = {
-  val effect = Effect()
-
   def constFoldGlobal(visit: NodeVisitorValue, globalVar: Var, op: Op): Option[ConstVal] = visit(op) {
     case ViewCtrl(Ret(_), WriteGlobal(global, 0, ConstExpr(constVal))) if globalVar == global => Some(constVal)
     case Branch(_, elseNext) => constFoldGlobal(visit, globalVar, op.next).orElse(constFoldGlobal(visit, globalVar, elseNext))
@@ -162,12 +144,12 @@ def globalVarInline(optUnit: OptUnit): Boolean = {
     constVal <- constFoldGlobal(NodeVisitorValue(), globalVar, globalVar.entry)
   } yield (globalVar.id, constVal)).toMap
 
-  def replaceExpr(visit: NodeVisitorUnit, dataflowMap: mutable.Map[Long, Op], op: Op): Unit = visit(op) {
+  def replaceExpr(visit: NodeVisitorUnit, dataflowMap: mutable.Map[Data, Data], op: Op): Unit = visit(op) {
     case readGlobal@ReadGlobal(global, 0) if constGlobals.contains(global.id) =>
       val (firstConstOp: Op, lastConstOp: Op) = constGlobals(global.id).toGraph
       lastConstOp.next = readGlobal.next
       readGlobal.next = firstConstOp
-      dataflowMap(readGlobal.id) = lastConstOp
+      dataflowMap(Data(readGlobal)) = Data(lastConstOp)
       replaceExpr(visit, dataflowMap, op.next)
     case Branch(_, elseNext) =>
       replaceExpr(visit, dataflowMap, op.next)
@@ -178,20 +160,18 @@ def globalVarInline(optUnit: OptUnit): Boolean = {
 
   optUnit.funs.foreach {
     case codeFun: CodeFun =>
-      val dataflowMap = mutable.Map[Long, Op]()
+      val dataflowMap = mutable.Map[Data, Data]()
       replaceExpr(NodeVisitorUnit(), dataflowMap, codeFun.entry)
       replaceDataflow(NodeVisitorUnit(), dataflowMap, codeFun.entry)
     case _ => ()
   }
 
-  effect.effect
+  false
 }
 
 def funExprInline(optUnit: OptUnit): Boolean = {
-  val effect = Effect()
-
   def callInline(visit: NodeVisitorUnit, op: Op): Unit = visit(op) {
-    case call@Call(Right((Some(FunLit(fun)), 0)), _) =>
+    case call@Call(Right(Data(Some(FunLit(fun)), 0)), _) =>
       call.fun = Left(fun)
       callInline(visit, call.next)
     case Branch(_, elseNext) =>
@@ -210,12 +190,107 @@ def funExprInline(optUnit: OptUnit): Boolean = {
     callInline(NodeVisitorUnit(), globalVar.entry)
   }
 
-  effect.effect
+  false
+}
+
+def localVarInline(optUnit: OptUnit): Boolean = {
+  def findSingleAssignLocals(visit: NodeVisitorUnit, locals: mutable.Map[Int, Data], multipleAssign: mutable.Set[Int], op: Op): Unit = visit(op) {
+    case WriteLocal(local, data) if locals.contains(local) =>
+      locals.remove(local)
+      multipleAssign.add(local)
+      findSingleAssignLocals(visit, locals, multipleAssign, op.next)
+    case WriteLocal(local, data) if !multipleAssign.contains(local) =>
+      locals(local) = data
+      findSingleAssignLocals(visit, locals, multipleAssign, op.next)
+    case Branch(_, elseNext) =>
+      findSingleAssignLocals(visit, locals, multipleAssign, op.next)
+      findSingleAssignLocals(visit, locals, multipleAssign, elseNext)
+    case Ret(_) => ()
+    case _ => findSingleAssignLocals(visit, locals, multipleAssign, op.next)
+  }
+
+  def replaceSingleAssignLocals(visit: NodeVisitorUnit, locals: mutable.Map[Int, Data], dataflowMap: mutable.Map[Data, Data], op: Op): Unit = visit(op) {
+    case branch@Branch(_, writeOp@WriteLocal(local, _)) if locals.contains(local) =>
+      branch.elseNext = writeOp.next
+      visit.visited.remove(op.id)
+      replaceSingleAssignLocals(visit, locals, dataflowMap, op)
+    case ViewCtrl(writeOp@WriteLocal(local, _), op) if locals.contains(local) =>
+      op.next = writeOp.next
+      visit.visited.remove(op.id)
+      replaceSingleAssignLocals(visit, locals, dataflowMap, op)
+    case Branch(_, elseNext) =>
+      replaceSingleAssignLocals(visit, locals, dataflowMap, op.next)
+      replaceSingleAssignLocals(visit, locals, dataflowMap, elseNext)
+    case ReadLocal(local) =>
+      dataflowMap(Data(op)) = locals(local)
+      replaceSingleAssignLocals(visit, locals, dataflowMap, op.next)
+    case RefLocal(local) =>
+      val refOp = RefValue(locals(local))
+      refOp.next = op.next
+      op.next = refOp
+      dataflowMap(Data(op)) = Data(refOp)
+      replaceSingleAssignLocals(visit, locals, dataflowMap, op.next)
+    case Ret(_) => ()
+    case _ => replaceSingleAssignLocals(visit, locals, dataflowMap, op.next)
+  }
+
+  optUnit.funs.foreach {
+    case codeFun: CodeFun =>
+      val locals = mutable.Map[Int, Data]()
+      val dataflowMap = mutable.Map[Data, Data]()
+      findSingleAssignLocals(NodeVisitorUnit(), locals, mutable.Set(), codeFun.entry)
+      replaceSingleAssignLocals(NodeVisitorUnit(), locals, dataflowMap, codeFun.entry)
+      replaceDataflow(NodeVisitorUnit(), dataflowMap, codeFun.entry)
+    case _ => ()
+  }
+
+  optUnit.vars.foreach { globalVar =>
+    val locals = mutable.Map[Int, Data]()
+    val dataflowMap = mutable.Map[Data, Data]()
+    findSingleAssignLocals(NodeVisitorUnit(), locals, mutable.Set(), globalVar.entry)
+    replaceSingleAssignLocals(NodeVisitorUnit(), locals, dataflowMap, globalVar.entry)
+    replaceDataflow(NodeVisitorUnit(), dataflowMap, globalVar.entry)
+  }
+
+  false
+}
+
+def inlineFunctions(optUnit: OptUnit): Boolean = {
+  val INLINE_THRESHOLD = 15
+
+  val functionsToInline = mutable.Map[CodeFun, Int]()
+
+  def iterateNodes(visit: NodeVisitorUnit, op: Op): Unit = visit(op) {
+    case Branch(_, elseNext) =>
+      iterateNodes(visit, op.next)
+      iterateNodes(visit, elseNext)
+    case Ret(_) => ()
+    case _ => iterateNodes(visit, op.next)
+  }
+
+  def shouldInline(codeFun: CodeFun): Boolean = functionsToInline.getOrElseUpdate(codeFun, {
+    val visit = NodeVisitorUnit()
+    iterateNodes(visit, codeFun.entry)
+    visit.visited.size
+  }) <= INLINE_THRESHOLD
+
+  def inlineFunction(visit: NodeVisitorUnit, mainFun: Option[CodeFun], codeFun: CodeFun, op: Op): Unit = visit(op) {
+    case _ => ???
+  }
+
+  def scanForInline(visit: NodeVisitorUnit, codeFun: Option[CodeFun], op: Op): Unit = visit(op) {
+    case ViewCtrl(Call(Left(codeFun: CodeFun), params), _) => ???
+    case Branch(_, elseNext) =>
+      iterateNodes(visit, op.next)
+      iterateNodes(visit, elseNext)
+    case Ret(_) => ()
+    case _ => iterateNodes(visit, op.next)
+  }
+
+  false
 }
 
 def deadCodeElimination(optUnit: OptUnit): Boolean = {
-  val effect = Effect()
-
   def findReachableNodes(visit: NodeVisitorUnit, reachable: mutable.Set[Long], op: Op): Unit = visit(op) {
     case TupleLit(elements) =>
       reachable.addAll(elements.flatMap(_._1).map(_.id))
@@ -292,14 +367,14 @@ def deadCodeElimination(optUnit: OptUnit): Boolean = {
   def purgeUnreachableNodes(visit: NodeVisitorUnit, reachable: mutable.Set[Long], op: Op): Unit = visit(op) {
     case branch@Branch(_, elseNext) if !reachable.contains(elseNext.id) && isPure(elseNext) =>
       branch.elseNext = elseNext.next
-      visit.visited.remove(branch.id)
-      purgeUnreachableNodes(visit, reachable, branch)
+      visit.visited.remove(op.id)
+      purgeUnreachableNodes(visit, reachable, op)
     case ViewCtrl(nextOp, op) if !reachable.contains(nextOp.id) && isPure(nextOp) =>
       op.next = nextOp.next
       visit.visited.remove(op.id)
       purgeUnreachableNodes(visit, reachable, op)
-    case branch@Branch(_, elseNext) =>
-      purgeUnreachableNodes(visit, reachable, branch.next)
+    case Branch(_, elseNext) =>
+      purgeUnreachableNodes(visit, reachable, op.next)
       purgeUnreachableNodes(visit, reachable, elseNext)
     case Ret(_) => ()
     case _ => purgeUnreachableNodes(visit, reachable, op.next)
@@ -319,5 +394,5 @@ def deadCodeElimination(optUnit: OptUnit): Boolean = {
     purgeUnreachableNodes(NodeVisitorUnit(), reachable, globalVar.entry)
   }
 
-  effect.effect
+  false
 }

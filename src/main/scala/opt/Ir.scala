@@ -23,7 +23,7 @@ abstract class ConstVal {
     case ConstBool(bool) => toPair(BoolLit(bool))
     case ConstTuple(elements) =>
       val elementOps = elements.map(_.toGraph)
-      val tupleOp = TupleLit(elementOps.map(_._2).map(toData))
+      val tupleOp = TupleLit(elementOps.map(_._2).map(Data.apply))
       val firstElementOp = linkOpSections(tupleOp)(elementOps)
       (firstElementOp, tupleOp)
     case ConstFun(fun) => toPair(FunLit(fun))
@@ -36,12 +36,21 @@ case class ConstBool(bool: Boolean) extends ConstVal
 case class ConstTuple(elements: List[ConstVal]) extends ConstVal
 case class ConstFun(fun: Fun) extends ConstVal
 
-type Data = (Option[Op], Int)
 type Ctrl = Op
 
-def toPair(op: Op): (Op, Op) = (op, op)
+case class Data(op: Option[Op], idx: Int) {
+  override def equals(obj: Any): Boolean = (this, obj) match {
+    case (Data(Some(op0), idx0), Data(Some(op1), idx1)) => (op0 eq op1) && (idx0 == idx1)
+    case (Data(None, idx0), Data(None, idx1)) => idx0 == idx1
+    case _ => false
+  }
+}
 
-def toData(op: Op): Data = (Some(op), 0)
+object Data {
+  def apply(op: Op): Data = Data(Some(op), 0)
+}
+
+def toPair(op: Op): (Op, Op) = (op, op)
 
 def linkOps(next: Ctrl)(ops: List[Op]): Op = ops match {
   case op :: rest =>
@@ -62,18 +71,18 @@ def graph(lines: List[String]): String = s"${lines.map(" " * 8 + _).mkString("\n
 def graphNode(main: Op)(label: String): String = s"Op_${main.id} [label = \"$label\"]"
 
 def graphDataEdge(main: Op, funIndex: Int)(data: Data): String = data match {
-  case (Some(op), _) => s"Op_${op.id} -> Op_${main.id} [color = purple]"
-  case (None, idx) => s"Par_${funIndex}_$idx -> Op_${main.id} [color = purple]"
+  case Data(Some(op), _) => s"Op_${op.id} -> Op_${main.id} [color = purple]"
+  case Data(None, idx) => s"Par_${funIndex}_$idx -> Op_${main.id} [color = purple]"
 }
 
 def graphDataEdgeSec(main: Op, funIndex: Int)(data: Data): String = data match {
-  case (Some(op), _) => s"Op_${op.id} -> Op_${main.id} [color = blue]"
-  case (None, idx) => s"Par_${funIndex}_$idx -> Op_${main.id} [color = blue]"
+  case Data(Some(op), _) => s"Op_${op.id} -> Op_${main.id} [color = blue]"
+  case Data(None, idx) => s"Par_${funIndex}_$idx -> Op_${main.id} [color = blue]"
 }
 
 def graphDataEdgeLabel(main: Op, funIndex: Int)(label: String)(data: Data): String = data match {
-  case (Some(op), _) => s"Op_${op.id} -> Op_${main.id} [color = purple, label = \"$label\"]"
-  case (None, idx) => s"Par_${funIndex}_$idx -> Op_${main.id} [color = purple, label = \"$label\"]"
+  case Data(Some(op), _) => s"Op_${op.id} -> Op_${main.id} [color = purple, label = \"$label\"]"
+  case Data(None, idx) => s"Par_${funIndex}_$idx -> Op_${main.id} [color = purple, label = \"$label\"]"
 }
 
 def graphCtrlEdge(main: Op)(ctrl: Ctrl): String = s"Op_${main.id} -> Op_${ctrl.id} [color = orange]"
@@ -122,6 +131,7 @@ abstract class Op {
       case TupleIdx(tuple, idx) => node(s"tuple[$idx]") :: dataEdge(tuple) :: recur
       case ReadRef(ref) => node(s"val") :: dataEdge(ref) :: recur
       case WriteRef(ref, data) => node(s"ref = ") :: dataEdge(ref) :: dataEdgeSec(data) :: recur
+      case RefValue(data) => node(s"ref") :: dataEdge(data) :: recur
       case ReadLocal(local) => node(s"local[$local]") :: recur
       case WriteLocal(local, data) => node(s"local[$local] = ") :: dataEdge(data) :: recur
       case RefLocal(local) => node(s"ref local[$local]") :: recur
@@ -130,6 +140,7 @@ abstract class Op {
       case RefGlobal(global, idx) => node(s"ref global[${varIds(global)}][$idx]") :: recur
       case Call(Left(fun), values) => node(s"invoke[${funIds(fun)}]") :: (recur ::: values.map(dataEdge))
       case Call(Right(fun), values) => node("invoke") :: dataEdgeSec(fun) :: (recur ::: values.map(dataEdge))
+      case Entry() => node("entry") :: recur
       case Ret(returnValues) => node("return") :: returnValues.map(dataEdge)
     }
   } else List.empty
@@ -156,6 +167,7 @@ case class Phi(var branch: Branch, var ifTrue: Data, var ifFalse: Data) extends 
 case class TupleIdx(var tuple: Data, var idx: Int) extends Op
 case class ReadRef(var ref: Data) extends Op
 case class WriteRef(var ref: Data, var data: Data) extends Op
+case class RefValue(var data: Data) extends Op
 case class ReadLocal(var local: Int) extends Op
 case class WriteLocal(var local: Int, var data: Data) extends Op
 case class RefLocal(var local: Int) extends Op
@@ -163,6 +175,7 @@ case class ReadGlobal(var global: Var, var idx: Int) extends Op
 case class WriteGlobal(var global: Var, var idx: Int, var data: Data) extends Op
 case class RefGlobal(var global: Var, var idx: Int) extends Op
 case class Call(var fun: Either[Fun, Data], var values: List[Data]) extends Op
+case class Entry() extends Op
 case class Ret(var returnValues: List[Data]) extends Op
 
 abstract class Fun {
@@ -177,7 +190,7 @@ abstract class Fun {
   def format(index: Int, funIds: Map[Fun, Int], varIds: Map[Var, Int]): String
 }
 
-class CodeFun(var entry: Ctrl = null, var signature: FunDatatype = null, var localVars: List[Datatype] = null) extends Fun {
+class CodeFun(var entry: Entry = null, var signature: FunDatatype = null, var localVars: List[Datatype] = null) extends Fun {
   def format(index: Int, funIds: Map[Fun, Int], varIds: Map[Var, Int]): String = graph(s"Fun_$index [shape = box, label = \"function[$index]\"]" :: s"Fun_$index -> Op_${entry.id} [color = orange]" :: formatParams(index) ::: entry.format(mutable.Set(), index, funIds, varIds))
 }
 
@@ -185,7 +198,7 @@ class AsmFun(val instr: List[gen.Instr], val signature: FunDatatype) extends Fun
   def format(index: Int, funIds: Map[Fun, Int], varIds: Map[Var, Int]): String = graph(List(s"Fun_$index [shape = box, label = \"asm function[$index]\"]"))
 }
 
-class Var(var entry: Ctrl = null, var localVars: List[Datatype] = null) {
+class Var(var entry: Entry = null, var localVars: List[Datatype] = null) {
   val id: Long = OptUnit.nextId
 
   def format(index: Int, funIds: Map[Fun, Int], varIds: Map[Var, Int]): String = graph(s"Var_$index [shape = diamond, label = \"global[$index]\"]" :: s"Var_$index -> Op_${entry.id} [color = orange]" :: entry.format(mutable.Set(), 0, funIds, varIds))

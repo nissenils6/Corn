@@ -54,13 +54,15 @@ class UserGlobalVarInit(module: => Module, expr: syn.Expr, pattern: => Pattern[U
 
   def generateIr(globalVar: opt.Var, context: IrGenContext): Unit = {
     val localVars = analyzedExpr.gatherLocals
+    val entry = opt.Entry()
     val (firstExprOp: opt.Op, lastExprOp: opt.Op) = analyzedExpr.generateIr(context, localVars.zipWithIndex.toMap)
-    val patternOps = Pattern.generateIrGlobal(analyzedPattern, opt.toData(lastExprOp), context)
+    val patternOps = Pattern.generateIrGlobal(analyzedPattern, opt.Data(lastExprOp), context)
     val retOp = opt.Ret(List())
     val firstPatternOp = opt.linkOps(retOp)(patternOps)
 
+    entry.next = firstExprOp
     lastExprOp.next = firstPatternOp
-    globalVar.entry = firstExprOp
+    globalVar.entry = entry
     globalVar.localVars = localVars.map(_.datatype.optDatatype)
   }
 
@@ -188,15 +190,17 @@ class UserFun(val module: Module, parameters: List[syn.Pattern], retTypeExpr: Op
     val localVarsList = analyzedExpr.gatherLocals.concat(params.values)
     val localVars = localVarsList.zipWithIndex.toMap
     val paramOps = args.zipWithIndex.flatMap { case (pattern, index) =>
-      Pattern.generateIrLocal(pattern, (None, index), localVars)
+      Pattern.generateIrLocal(pattern, opt.Data(None, index), localVars)
     }
+    val entry = opt.Entry()
     val (firstExprOp: opt.Op, lastExprOp: opt.Op) = analyzedExpr.generateIr(context, localVars)
-    val retOp = opt.Ret(List(opt.toData(lastExprOp)))
+    val retOp = opt.Ret(List(opt.Data(lastExprOp)))
     val firstParamOp = opt.linkOps(firstExprOp)(paramOps)
 
+    entry.next = firstParamOp
     lastExprOp.next = retOp
 
-    fun.entry = firstParamOp
+    fun.entry = entry
     fun.localVars = localVarsList.map(_.datatype.optDatatype)
     fun.signature = signature.optDatatype.asInstanceOf[opt.FunDatatype]
   }
@@ -322,14 +326,16 @@ class Module(val file: File, fileContent: => (Map[String, List[GlobalVar]], List
 
     val builtinVars: List[(BuiltinGlobalVar, (opt.Var, Int))] = vars.values.flatten.collect { case builtin: BuiltinGlobalVar if builtin.datatype.runtime && builtin.constVal.nonEmpty =>
       val optVar = new opt.Var()
+      val entry = opt.Entry()
       val (firstConstOp: opt.Op, lastConstOp: opt.Op) = builtin.constVal.get.generateIr(funsMap).toGraph
-      val writeOp = opt.WriteGlobal(optVar, 0, opt.toData(lastConstOp))
+      val writeOp = opt.WriteGlobal(optVar, 0, opt.Data(lastConstOp))
       val retOp = opt.Ret(List())
 
+      entry.next = lastConstOp
       lastConstOp.next = writeOp
       writeOp.next = retOp
 
-      optVar.entry = firstConstOp
+      optVar.entry = entry
       optVar.localVars = List()
 
       (builtin, (optVar, 0))

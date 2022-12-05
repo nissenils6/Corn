@@ -356,7 +356,7 @@ abstract class Expr() {
     case CallExpr(function, args, _, _) =>
       val (firstFunctionOp, lastFunctionOp) = function.generateIr(context, localVars)
       val argOps = args.map(_.generateIr(context, localVars))
-      val callOp = opt.Call(Right(opt.toData(lastFunctionOp)), argOps.map(_._2).map(opt.toData))
+      val callOp = opt.Call(Right(opt.Data(lastFunctionOp)), argOps.map(_._2).map(opt.Data.apply))
       val firstArgOp = opt.linkOpSections(callOp)(argOps)
       firstFunctionOp.next = firstArgOp
       (firstFunctionOp, callOp)
@@ -370,14 +370,14 @@ abstract class Expr() {
     case RefLocalVarExpr(localVar, _, _) => opt.toPair(opt.RefLocal(localVars(localVar)))
     case ValExpr(expr, _, _) =>
       val (firstExprOp, lastExprOp) = expr.generateIr(context, localVars)
-      val readOp = opt.ReadRef(opt.toData(lastExprOp))
+      val readOp = opt.ReadRef(opt.Data(lastExprOp))
       lastExprOp.next = readOp
       (firstExprOp, readOp)
     case IntExpr(int, _, _) => opt.toPair(opt.IntLit(int))
     case BoolExpr(bool, _, _) => opt.toPair(opt.BoolLit(bool))
     case TupleExpr(elements, _, _) =>
       val elementOps = elements.map(_.generateIr(context, localVars))
-      val tupleOp = opt.TupleLit(elementOps.map(_._2).map(opt.toData))
+      val tupleOp = opt.TupleLit(elementOps.map(_._2).map(opt.Data.apply))
       val firstElementOp = opt.linkOpSections(tupleOp)(elementOps)
       (firstElementOp, tupleOp)
     case BlockExpr(exprs, lastExpr, _, _, _) =>
@@ -388,7 +388,7 @@ abstract class Expr() {
     case UnitExpr(_, _) => opt.toPair(opt.UnitLit())
     case LetExpr(pattern, expr, _, _) =>
       val (firstExprOp, lastExprOp) = expr.generateIr(context, localVars)
-      val patternOps = Pattern.generateIrLocal(pattern, opt.toData(lastExprOp), localVars)
+      val patternOps = Pattern.generateIrLocal(pattern, opt.Data(lastExprOp), localVars)
       val unitOp = opt.UnitLit()
       val firstPatternOp = opt.linkOps(unitOp)(patternOps)
 
@@ -397,7 +397,7 @@ abstract class Expr() {
       (firstExprOp, unitOp)
     case AssignExpr(LocalVarExpr(localVar, _, _), expr, _, _) =>
       val (firstExprOp, lastExprOp) = expr.generateIr(context, localVars)
-      val writeOp = opt.WriteLocal(localVars(localVar), opt.toData(lastExprOp))
+      val writeOp = opt.WriteLocal(localVars(localVar), opt.Data(lastExprOp))
 
       lastExprOp.next = writeOp
 
@@ -405,7 +405,7 @@ abstract class Expr() {
     case AssignExpr(GlobalVarExpr(globalVar, _, _), expr, _, _) =>
       val (firstExprOp, lastExprOp) = expr.generateIr(context, localVars)
       val (optVar: opt.Var, optVarIdx: Int) = context(globalVar)
-      val writeOp = opt.WriteGlobal(optVar, optVarIdx, opt.toData(lastExprOp))
+      val writeOp = opt.WriteGlobal(optVar, optVarIdx, opt.Data(lastExprOp))
 
       lastExprOp.next = writeOp
 
@@ -413,7 +413,7 @@ abstract class Expr() {
     case AssignExpr(ValExpr(refExpr, _, _), expr, _, _) =>
       val (firstRefExprOp, lastRefExprOp) = refExpr.generateIr(context, localVars)
       val (firstExprOp, lastExprOp) = expr.generateIr(context, localVars)
-      val writeOp = opt.WriteRef(opt.toData(lastRefExprOp), opt.toData(lastExprOp))
+      val writeOp = opt.WriteRef(opt.Data(lastRefExprOp), opt.Data(lastExprOp))
 
       lastRefExprOp.next = firstExprOp
       lastExprOp.next = writeOp
@@ -422,10 +422,10 @@ abstract class Expr() {
     case FunExpr(fun, _, _) => opt.toPair(opt.FunLit(context(fun)))
     case IfExpr(condition, ifBlock, elseBlock, _, _) =>
       val (firstConditionOp, lastConditionOp) = condition.generateIr(context, localVars)
-      val branchOp = opt.Branch(opt.toData(lastConditionOp))
+      val branchOp = opt.Branch(opt.Data(lastConditionOp))
       val (firstIfOp, lastIfOp) = ifBlock.generateIr(context, localVars)
       val (firstElseOp, lastElseOp) = elseBlock.generateIr(context, localVars)
-      val phiOp = opt.Phi(branchOp, opt.toData(lastIfOp), opt.toData(lastElseOp))
+      val phiOp = opt.Phi(branchOp, opt.Data(lastIfOp), opt.Data(lastElseOp))
 
       lastConditionOp.next = branchOp
       branchOp.next = firstIfOp

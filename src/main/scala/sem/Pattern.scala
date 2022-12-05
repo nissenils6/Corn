@@ -59,7 +59,7 @@ object Pattern {
       case (name, List(variable)) => Right((name, variable))
       case (name, varList) => Left(Error(Error.SEMANTIC, varList.head.range.file, varList.map(variable => ErrorComponent(variable.range)), Some(s"Duplicate variables named '$name'")))
     }
-    if (errors.nonEmpty) throw ErrorGroup(errors.toList)
+    if (errors.nonEmpty) throw ErrorGroup(errors)
     verifiedVars.toMap
   }
 
@@ -68,7 +68,7 @@ object Pattern {
     case TuplePattern(elements, _) =>
       elements.zipWithIndex.flatMap { case (subPattern, idx) =>
         val idxOp = opt.TupleIdx(expr, idx)
-        idxOp :: generateIrLocal(subPattern, opt.toData(idxOp), localVars)
+        idxOp :: generateIrLocal(subPattern, opt.Data(idxOp), localVars)
       }
   }
 
@@ -79,7 +79,7 @@ object Pattern {
     case TuplePattern(elements, _) =>
       elements.zipWithIndex.flatMap { case (subPattern, idx) =>
         val idxOp = opt.TupleIdx(expr, idx)
-        idxOp :: generateIrGlobal(subPattern, opt.toData(idxOp), context)
+        idxOp :: generateIrGlobal(subPattern, opt.Data(idxOp), context)
       }
   }
 }

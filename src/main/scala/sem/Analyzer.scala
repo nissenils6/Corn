@@ -10,21 +10,25 @@ type BinGraphOp = (opt.Data, opt.Data) => opt.Op
 type CompGraphOp = opt.Data => opt.Op
 
 def binaryOperatorGraph(graphOp: BinGraphOp, params: List[opt.Datatype], returnType: opt.Datatype): Option[opt.Fun] = {
-  val op = graphOp((None, 0), (None, 1))
-  val retOp = opt.Ret(List((Some(op), 0)))
+  val entry = opt.Entry()
+  val op = graphOp(Data(None, 0), Data(None, 1))
+  val retOp = opt.Ret(List(Data(op)))
+  entry.next = op
   op.next = retOp
 
-  Some(new CodeFun(op, opt.FunDatatype(params, List(returnType)), List()))
+  Some(new CodeFun(entry, opt.FunDatatype(params, List(returnType)), List()))
 }
 
 def compOperatorGraph(graphOp: CompGraphOp, swapped: Boolean, params: List[opt.Datatype], returnType: opt.Datatype): Option[opt.Fun] = {
-  val subOp = opt.AddInt(List((None, if swapped then 1 else 0)), List((None, if swapped then 0 else 1)))
-  val op = graphOp((Some(subOp), 0))
-  val retOp = opt.Ret(List((Some(op), 0)))
+  val entry = opt.Entry()
+  val subOp = opt.AddInt(List(Data(None, if swapped then 1 else 0)), List(Data(None, if swapped then 0 else 1)))
+  val op = graphOp(Data(Some(subOp), 0))
+  val retOp = opt.Ret(List(Data(Some(op), 0)))
+  entry.next = subOp
   subOp.next = op
   op.next = retOp
 
-  Some(new CodeFun(subOp, opt.FunDatatype(params, List(returnType)), List()))
+  Some(new CodeFun(entry, opt.FunDatatype(params, List(returnType)), List()))
 }
 
 def simpleOperator(module: => Module, name: String, compileTimeFunction: (Long, Long) => Long, asmOperation: (Address, Reg) => SimpleOpMem, graphOp: BinGraphOp): BuiltinGlobalVar =
