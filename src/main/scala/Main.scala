@@ -127,10 +127,13 @@ def parseArgs(args: List[(FilePosRange, String)], parsedArgs: ParsedArgs): Parse
       Process(s"dot -Tsvg $filePath.opt_graph.txt -o $filePath.opt_graph.svg").!(ProcessLogger(_ => ()))
       opt.globalVarInline(optUnit)
       opt.funExprInline(optUnit)
-      opt.localVarInline(optUnit)
+      opt.inlineFunctions(optUnit)
+//      opt.localVarInline(optUnit)
       opt.deadCodeElimination(optUnit)
       printFile(filePath + ".opt_graph_1.txt", optUnit.format())
       Process(s"dot -Tsvg $filePath.opt_graph_1.txt -o $filePath.opt_graph_1.svg").!(ProcessLogger(_ => ()))
+      printFile(filePath + ".opt_graph_2.txt", optUnit.format())
+      Process(s"dot -Tsvg $filePath.opt_graph_2.txt -o $filePath.opt_graph_2.svg").!(ProcessLogger(_ => ()))
     }
 
     printFile(filePath + ".asm", AsmGen.toString)

@@ -3,6 +3,7 @@ package opt
 import scala.annotation.tailrec
 import scala.collection.mutable
 import scala.compiletime.ops.int
+import scala.concurrent.ExecutionContext.global
 
 object ConstExpr {
   def unapply(data: Data): Option[ConstVal] = data match {
@@ -50,9 +51,9 @@ object NodeVisitorUnit {
   def apply(): NodeVisitorUnit = new NodeVisitorUnit()
 }
 
-def mapDataflow(dataflowMap: mutable.Map[Data, Data])(data: Data): Data = dataflowMap.getOrElse(data, data)
+def mapDataflow(dataflowMap: collection.Map[Data, Data])(data: Data): Data = dataflowMap.getOrElse(data, data)
 
-def replaceDataflow(visit: NodeVisitorUnit, dataflowMap: mutable.Map[Data, Data], op: Op): Unit = visit(op) {
+def replaceDataflow(visit: NodeVisitorUnit, dataflowMap: collection.Map[Data, Data], op: Op): Unit = visit(op) {
   case tupleLit@TupleLit(elements) =>
     tupleLit.elements = elements.map(mapDataflow(dataflowMap))
     replaceDataflow(visit, dataflowMap, op.next)
@@ -256,7 +257,7 @@ def localVarInline(optUnit: OptUnit): Boolean = {
 }
 
 def inlineFunctions(optUnit: OptUnit): Boolean = {
-  val INLINE_THRESHOLD = 15
+  val INLINE_THRESHOLD = 5
 
   val functionsToInline = mutable.Map[CodeFun, Int]()
 
@@ -274,17 +275,104 @@ def inlineFunctions(optUnit: OptUnit): Boolean = {
     visit.visited.size
   }) <= INLINE_THRESHOLD
 
-  def inlineFunction(visit: NodeVisitorUnit, mainFun: Option[CodeFun], codeFun: CodeFun, op: Op): Unit = visit(op) {
-    case _ => ???
+  def inlineFunction(visitedNodes: mutable.Map[Long, Op], params: Map[Int, Data], newLocalsOffset: Int, newRetsOffset: Int, mainFun: Option[CodeFun], codeFun: CodeFun, nextCtrl: Ctrl, op: Op): Op = if visitedNodes.contains(op.id) then visitedNodes(op.id) else {
+    def recur(nextOp: Op) = inlineFunction(visitedNodes, params, newLocalsOffset, newRetsOffset, mainFun, codeFun, nextCtrl, nextOp)
+
+    def mapData(data: Data) = data match {
+      case Data(Some(op), idx) => Data(Some(recur(op)), idx)
+      case Data(None, idx) => params(idx)
+    }
+
+    def newNode(newOp: Op): Op = {
+      visitedNodes(op.id) = newOp
+      newOp.next = recur(op.next)
+      newOp
+    }
+
+    op match {
+      case UnitLit() => newNode(UnitLit())
+      case IntLit(int) => newNode(IntLit(int))
+      case BoolLit(bool) => newNode(BoolLit(bool))
+      case FunLit(fun) => newNode(FunLit(fun))
+      case TupleLit(elements) => newNode(TupleLit(elements.map(mapData)))
+      case AddInt(addInts, subInts) => newNode(AddInt(addInts.map(mapData), subInts.map(mapData)))
+      case AndInt(ints) => newNode(AndInt(ints.map(mapData)))
+      case OrInt(ints) => newNode(OrInt(ints.map(mapData)))
+      case XorInt(ints) => newNode(XorInt(ints.map(mapData)))
+      case MultInt(ints) => newNode(MultInt(ints.map(mapData)))
+      case DivInt(dividend, divisor) => newNode(DivInt(mapData(dividend), mapData(divisor)))
+      case ModInt(dividend, divisor) => newNode(ModInt(mapData(dividend), mapData(divisor)))
+      case IsGreater(int) => newNode(IsGreater(mapData(int)))
+      case IsGreaterOrZero(int) => newNode(IsGreaterOrZero(mapData(int)))
+      case IsZero(int) => newNode(IsZero(mapData(int)))
+      case IsNotZero(int) => newNode(IsNotZero(mapData(int)))
+      case Branch(condition, elseNext) =>
+        val branchOp = Branch(mapData(condition))
+        visitedNodes(op.id) = branchOp
+        branchOp.next = recur(op.next)
+        branchOp.elseNext = recur(elseNext)
+        branchOp
+      case Phi(branch, ifTrue, ifFalse) => newNode(Phi(recur(branch).asInstanceOf[Branch], mapData(ifTrue), mapData(ifFalse)))
+      case TupleIdx(tuple, idx) => newNode(TupleIdx(mapData(tuple), idx))
+      case ReadRef(ref) => newNode(ReadRef(mapData(ref)))
+      case WriteRef(ref, data) => newNode(WriteRef(mapData(ref), mapData(data)))
+      case RefValue(data) => newNode(RefValue(mapData(data)))
+      case ReadLocal(local) => newNode(ReadLocal(local + newLocalsOffset))
+      case WriteLocal(local, data) => newNode(WriteLocal(local + newLocalsOffset, mapData(data)))
+      case RefLocal(local) => newNode(RefLocal(local + newLocalsOffset))
+      case ReadGlobal(global, idx) => newNode(ReadGlobal(global, idx))
+      case WriteGlobal(global, idx, data) => newNode(WriteGlobal(global, idx, mapData(data)))
+      case RefGlobal(global, idx) => newNode(RefGlobal(global, idx))
+      case Call(Left(fun), values) => newNode(Call(Left(fun), values.map(mapData)))
+      case Call(Right(fun), values) => newNode(Call(Right(mapData(fun)), values.map(mapData)))
+      case Ret(returnValues) =>
+        val returnValueOps = returnValues.zipWithIndex.map { case (data, idx) =>
+          WriteLocal(newRetsOffset + idx, mapData(data))
+        }
+        linkOps(nextCtrl)(returnValueOps)
+    }
   }
 
-  def scanForInline(visit: NodeVisitorUnit, codeFun: Option[CodeFun], op: Op): Unit = visit(op) {
-    case ViewCtrl(Call(Left(codeFun: CodeFun), params), _) => ???
+  def scanForInline(visit: NodeVisitorUnit, body: Either[Var, CodeFun], op: Op): Unit = visit(op) {
+    case ViewCtrl(callOp@Call(Left(codeFun: CodeFun), params), _) if shouldInline(codeFun) =>
+      val newLocalsOffset = body match {
+        case Left(globalVar) => globalVar.localVars.length
+        case Right(fun) => fun.localVars.length
+      }
+      val newRetsOffset = newLocalsOffset + codeFun.localVars.length
+      val unitOp = UnitLit()
+      op.next = inlineFunction(mutable.Map.empty, params.zipWithIndex.map(t => (t._2, t._1)).toMap, newLocalsOffset, newRetsOffset, body.toOption, codeFun, unitOp, codeFun.entry.next)
+      val retValCount = codeFun.signature.returnTypes.length
+      val (retLocalOps, retValueMap) = Range(0, retValCount).map { i =>
+        val readLocalOp = ReadLocal(newRetsOffset + i)
+        (readLocalOp, (Data(Some(callOp), i), Data(Some(readLocalOp), 0)))
+      }.toList.unzip
+      val firstRetLocalOp = linkOps(callOp.next)(retLocalOps)
+      unitOp.next = firstRetLocalOp
+      body match {
+        case Left(globalVar) =>
+          globalVar.localVars = globalVar.localVars ::: codeFun.localVars ::: codeFun.signature.returnTypes
+          replaceDataflow(NodeVisitorUnit(), retValueMap.toMap, globalVar.entry)
+        case Right(fun) =>
+          fun.localVars = fun.localVars ::: codeFun.localVars ::: codeFun.signature.returnTypes
+          functionsToInline.remove(fun)
+          replaceDataflow(NodeVisitorUnit(), retValueMap.toMap, fun.entry)
+      }
+      scanForInline(visit, body, op.next)
     case Branch(_, elseNext) =>
-      iterateNodes(visit, op.next)
-      iterateNodes(visit, elseNext)
+      scanForInline(visit, body, op.next)
+      scanForInline(visit, body, elseNext)
     case Ret(_) => ()
-    case _ => iterateNodes(visit, op.next)
+    case _ => scanForInline(visit, body, op.next)
+  }
+
+  optUnit.vars.foreach { globalVar =>
+    scanForInline(NodeVisitorUnit(), Left(globalVar), globalVar.entry)
+  }
+
+  optUnit.funs.foreach {
+    case codeFun: CodeFun => scanForInline(NodeVisitorUnit(), Right(codeFun), codeFun.entry)
+    case _ => ()
   }
 
   false
