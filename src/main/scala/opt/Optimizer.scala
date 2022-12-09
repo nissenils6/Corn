@@ -51,7 +51,8 @@ object NodeVisitorUnit {
   def apply(): NodeVisitorUnit = new NodeVisitorUnit()
 }
 
-def mapDataflow(dataflowMap: collection.Map[Data, Data])(data: Data): Data = dataflowMap.getOrElse(data, data)
+@tailrec
+def mapDataflow(dataflowMap: collection.Map[Data, Data])(data: Data): Data = if dataflowMap.contains(data) then mapDataflow(dataflowMap)(dataflowMap(data)) else data
 
 def replaceDataflow(visit: NodeVisitorUnit, dataflowMap: collection.Map[Data, Data], op: Op): Unit = visit(op) {
   case tupleLit@TupleLit(elements) =>
@@ -196,7 +197,11 @@ def funExprInline(optUnit: OptUnit): Boolean = {
 
 def localVarInline(optUnit: OptUnit): Boolean = {
   def findSingleAssignLocals(visit: NodeVisitorUnit, locals: mutable.Map[Int, Data], multipleAssign: mutable.Set[Int], op: Op): Unit = visit(op) {
-    case WriteLocal(local, data) if locals.contains(local) =>
+    case WriteLocal(local, _) if locals.contains(local) =>
+      locals.remove(local)
+      multipleAssign.add(local)
+      findSingleAssignLocals(visit, locals, multipleAssign, op.next)
+    case RefLocal(local) if locals.contains(local) =>
       locals.remove(local)
       multipleAssign.add(local)
       findSingleAssignLocals(visit, locals, multipleAssign, op.next)
@@ -215,21 +220,15 @@ def localVarInline(optUnit: OptUnit): Boolean = {
       branch.elseNext = writeOp.next
       visit.visited.remove(op.id)
       replaceSingleAssignLocals(visit, locals, dataflowMap, op)
-    case ViewCtrl(writeOp@WriteLocal(local, _), op) if locals.contains(local) =>
+    case ViewCtrl(writeOp@WriteLocal(local, _), _) if locals.contains(local) =>
       op.next = writeOp.next
       visit.visited.remove(op.id)
       replaceSingleAssignLocals(visit, locals, dataflowMap, op)
     case Branch(_, elseNext) =>
       replaceSingleAssignLocals(visit, locals, dataflowMap, op.next)
       replaceSingleAssignLocals(visit, locals, dataflowMap, elseNext)
-    case ReadLocal(local) =>
+    case ReadLocal(local) if locals.contains(local) =>
       dataflowMap(Data(op)) = locals(local)
-      replaceSingleAssignLocals(visit, locals, dataflowMap, op.next)
-    case RefLocal(local) =>
-      val refOp = RefValue(locals(local))
-      refOp.next = op.next
-      op.next = refOp
-      dataflowMap(Data(op)) = Data(refOp)
       replaceSingleAssignLocals(visit, locals, dataflowMap, op.next)
     case Ret(_) => ()
     case _ => replaceSingleAssignLocals(visit, locals, dataflowMap, op.next)
