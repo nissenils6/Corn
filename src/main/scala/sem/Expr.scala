@@ -352,13 +352,13 @@ abstract class Expr() {
     case MutExpr(_, _, _, range) => Error.internal("", range)
   }
 
-  def generateIr(context: IrGenContext, localVars: Map[LocalVar, Int]): (opt.Op, opt.Op) = this match {
+  def generateIr(context: IrGenContext, localVars: Map[LocalVar, Int]): (opt.Op, opt.OpNext) = this match {
     case CallExpr(function, args, _, _) =>
       val (firstFunctionOp, lastFunctionOp) = function.generateIr(context, localVars)
       val argOps = args.map(_.generateIr(context, localVars))
       val callOp = opt.Call(Right(opt.Data(lastFunctionOp)), argOps.map(_._2).map(opt.Data.apply))
       val firstArgOp = opt.linkOpSections(callOp)(argOps)
-      firstFunctionOp.next = firstArgOp
+      lastFunctionOp.next = firstArgOp
       (firstFunctionOp, callOp)
     case GlobalVarExpr(globalVar, _, _) =>
       val (optVar: opt.Var, optVarIdx: Int) = context(globalVar)
@@ -422,18 +422,22 @@ abstract class Expr() {
     case FunExpr(fun, _, _) => opt.toPair(opt.FunLit(context(fun)))
     case IfExpr(condition, ifBlock, elseBlock, _, _) =>
       val (firstConditionOp, lastConditionOp) = condition.generateIr(context, localVars)
-      val branchOp = opt.Branch(opt.Data(lastConditionOp))
+
       val (firstIfOp, lastIfOp) = ifBlock.generateIr(context, localVars)
+      val ifBlockNode = opt.Block(firstIfOp)
+
       val (firstElseOp, lastElseOp) = elseBlock.generateIr(context, localVars)
-      val phiOp = opt.Phi(branchOp, opt.Data(lastIfOp), opt.Data(lastElseOp))
+      val elseBlockNode = opt.Block(firstElseOp)
 
-      lastConditionOp.next = branchOp
-      branchOp.next = firstIfOp
-      branchOp.elseNext = firstElseOp
-      lastIfOp.next = phiOp
-      lastElseOp.next = phiOp
+      val ifOp = opt.If(opt.Data(lastConditionOp), ifBlockNode, elseBlockNode)
+      val endIfNode = opt.EndIf(ifOp, List(opt.Data(lastIfOp)))
+      val endElseNode = opt.EndIf(ifOp, List(opt.Data(lastElseOp)))
 
-      (firstConditionOp, phiOp)
+      lastConditionOp.next = ifOp
+      lastIfOp.next = endIfNode
+      lastElseOp.next = endElseNode
+
+      (firstConditionOp, ifOp)
     case expr: Expr => throw Error.internal(s"Attempt to generate ir from compile time expression (this is bug in the semantic analyzer)", expr.range)
   }
 

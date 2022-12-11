@@ -63,7 +63,7 @@ object Pattern {
     verifiedVars.toMap
   }
 
-  def generateIrLocal(pattern: Pattern[LocalVar], expr: opt.Data, localVars: Map[LocalVar, Int]): List[opt.Op] = pattern match {
+  def generateIrLocal(pattern: Pattern[LocalVar], expr: opt.Data, localVars: Map[LocalVar, Int]): List[opt.OpNext] = pattern match {
     case VarPattern(patternVar, _) => List(opt.WriteLocal(localVars(patternVar), expr))
     case TuplePattern(elements, _) =>
       elements.zipWithIndex.flatMap { case (subPattern, idx) =>
@@ -72,7 +72,7 @@ object Pattern {
       }
   }
 
-  def generateIrGlobal(pattern: Pattern[UserGlobalVar], expr: opt.Data, context: IrGenContext): List[opt.Op] = pattern match {
+  def generateIrGlobal(pattern: Pattern[UserGlobalVar], expr: opt.Data, context: IrGenContext): List[opt.OpNext] = pattern match {
     case VarPattern(patternVar, _) =>
       val (optVar: opt.Var, optVarIdx: Int) = context(patternVar)
       List(opt.WriteGlobal(optVar, optVarIdx, expr))

@@ -17,7 +17,7 @@ case class TupleDatatype(elements: List[Datatype]) extends Datatype
 case class FunDatatype(params: List[Datatype], returnTypes: List[Datatype]) extends Datatype
 
 abstract class ConstVal {
-  def toGraph: (Op, Op) = this match {
+  def toGraph: (Op, OpNext) = this match {
     case ConstUnit => toPair(UnitLit())
     case ConstInt(int) => toPair(IntLit(int))
     case ConstBool(bool) => toPair(BoolLit(bool))
@@ -50,16 +50,16 @@ object Data {
   def apply(op: Op): Data = Data(Some(op), 0)
 }
 
-def toPair(op: Op): (Op, Op) = (op, op)
+def toPair[T](e: T): (T, T) = (e, e)
 
-def linkOps(next: Ctrl)(ops: List[Op]): Op = ops match {
+def linkOps(next: Ctrl)(ops: List[OpNext]): Op = ops match {
   case op :: rest =>
     op.next = linkOps(next)(rest)
     op
   case _ => next
 }
 
-def linkOpSections(next: Ctrl)(ops: List[(Op, Op)]): Op = ops match {
+def linkOpSections(next: Ctrl)(ops: List[(Op, OpNext)]): Op = ops match {
   case (firstOp, lastOp) :: rest =>
     lastOp.next = linkOpSections(next)(rest)
     firstOp
@@ -70,44 +70,51 @@ def graph(lines: List[String]): String = s"${lines.map(" " * 8 + _).mkString("\n
 
 def graphNode(main: Op)(label: String): String = s"Op_${main.id} [label = \"$label\"]"
 
-def graphDataEdge(main: Op, funIndex: Int)(data: Data): String = data match {
-  case Data(Some(op), _) => s"Op_${op.id} -> Op_${main.id} [color = purple]"
-  case Data(None, idx) => s"Par_${funIndex}_$idx -> Op_${main.id} [color = purple]"
+def graphDataEdge(main: Op, funIndex: Int)(color: String)(label: String)(data: Data): String = data match {
+  case Data(Some(op), idx) => s"Op_${op.id} -> Op_${main.id} [color = $color, label = \"${Some(idx).filter(_ > 0).map(i => s"[$i] ").getOrElse("")}$label\"]" //
+  case Data(None, idx) => s"Par_${funIndex}_$idx -> Op_${main.id} [color = $color, label = \"$label\"]"
 }
 
-def graphDataEdgeSec(main: Op, funIndex: Int)(data: Data): String = data match {
-  case Data(Some(op), _) => s"Op_${op.id} -> Op_${main.id} [color = blue]"
-  case Data(None, idx) => s"Par_${funIndex}_$idx -> Op_${main.id} [color = blue]"
+def graphCtrlEdge(main: Op)(color: String)(ctrl: Ctrl): String = s"Op_${main.id} -> Op_${ctrl.id} [color = $color]"
+
+enum BitwiseOp(val string: String) {
+  case And extends BitwiseOp("&")
+  case Or extends BitwiseOp("|")
+  case Xor extends BitwiseOp("^")
 }
 
-def graphDataEdgeLabel(main: Op, funIndex: Int)(label: String)(data: Data): String = data match {
-  case Data(Some(op), _) => s"Op_${op.id} -> Op_${main.id} [color = purple, label = \"$label\"]"
-  case Data(None, idx) => s"Par_${funIndex}_$idx -> Op_${main.id} [color = purple, label = \"$label\"]"
+enum CompType(val string: String) {
+  case Pos extends CompType(">0")
+  case PosOrZero extends CompType(">=0")
+  case Zero extends CompType("==0")
+  case NotZero extends CompType("!=0")
 }
 
-def graphCtrlEdge(main: Op)(ctrl: Ctrl): String = s"Op_${main.id} -> Op_${ctrl.id} [color = orange]"
+trait HasNext {
+  def next: Ctrl
+  def next_=(op: Ctrl): Unit
+}
 
-def graphCtrlEdgeSec(main: Op)(ctrl: Ctrl): String = s"Op_${main.id} -> Op_${ctrl.id} [color = red]"
-
-def graphPhiEdge(main: Op)(branch: Branch): String = s"Op_${main.id} -> Op_${branch.id} [color = green]"
+case class Block(var next: Ctrl = null) extends HasNext
 
 abstract class Op {
   val id = OptUnit.nextId
-
-  var next: Ctrl = null
-
+  
   def format(formatted: mutable.Set[Long], funIndex: Int, funIds: Map[Fun, Int], varIds: Map[Var, Int]): List[String] = if (!formatted.contains(id)) {
     formatted.add(id)
 
     val node = graphNode(this)
-    val dataEdge = graphDataEdge(this, funIndex)
-    val dataEdgeSec = graphDataEdgeSec(this, funIndex)
-    val dataEdgeLabel = graphDataEdgeLabel(this, funIndex)
-    val ctrlEdge = graphCtrlEdge(this)
-    val ctrlEdgeSec = graphCtrlEdgeSec(this)
-    val phiEdge = graphPhiEdge(this)
+    val dataEdge = graphDataEdge(this, funIndex)("purple")("")
+    val dataEdgeSec = graphDataEdge(this, funIndex)("blue")("")
+    val dataEdgeLabel = graphDataEdge(this, funIndex)("purple")
+    val ctrlEdge = graphCtrlEdge(this)("orange")
+    val ctrlEdgeIf = graphCtrlEdge(this)("red")
+    val ctrlEdgeElse = graphCtrlEdge(this)("green")
 
-    def recur: List[String] = ctrlEdge(next) :: next.format(formatted, funIndex, funIds, varIds)
+    def recur: List[String] = this match {
+      case hasNext: HasNext => ctrlEdge(hasNext.next) :: hasNext.next.format(formatted, funIndex, funIds, varIds)
+      case _ => List()
+    }
 
     this match {
       case UnitLit() => node("unit") :: recur
@@ -116,18 +123,12 @@ abstract class Op {
       case FunLit(fun) => node(s"function[${funIds(fun)}]") :: recur
       case TupleLit(elements) => node(s"tuple") :: (recur ::: elements.map(dataEdge))
       case AddInt(addInts, subInts) => node("+") :: (recur ::: addInts.map(dataEdge) ::: subInts.map(dataEdgeLabel("Negate")))
-      case AndInt(ints) => node("&") :: (recur ::: ints.map(dataEdge))
-      case OrInt(ints) => node("|") :: (recur ::: ints.map(dataEdge))
-      case XorInt(ints) => node("^") :: (recur ::: ints.map(dataEdge))
+      case BitwiseInt(bitwiseOp, ints) => node(bitwiseOp.string) :: (recur ::: ints.map(dataEdge))
       case MultInt(ints) => node("*") :: (recur ::: ints.map(dataEdge))
       case DivInt(dividend, divisor) => node("/") :: dataEdgeLabel("Dividend")(dividend) :: dataEdgeLabel("Divisor")(divisor) :: recur
-      case ModInt(dividend, divisor) => node("%") :: dataEdgeLabel("Dividend")(dividend) :: dataEdgeLabel("Divisor")(divisor) :: recur
-      case IsGreater(int) => node(">0") :: dataEdge(int) :: recur
-      case IsGreaterOrZero(int) => node(">=0") :: dataEdge(int) :: recur
-      case IsZero(int) => node("==0") :: dataEdge(int) :: recur
-      case IsNotZero(int) => node("!=0") :: dataEdge(int) :: recur
-      case Branch(condition, elseNext) => node("branch") :: dataEdge(condition) :: ctrlEdgeSec(elseNext) :: (recur ::: elseNext.format(formatted, funIndex, funIds, varIds))
-      case Phi(branch, ifTrue, ifFalse) => node("phi") :: phiEdge(branch) :: dataEdge(ifTrue) :: dataEdgeSec(ifFalse) :: recur
+      case CompInt(compType, int) => node(compType.string) :: dataEdge(int) :: recur
+      case If(condition, ifBlock, elseBlock) => node("if") :: dataEdge(condition) :: ctrlEdgeIf(ifBlock.next) :: ctrlEdgeElse(elseBlock.next) :: (ifBlock.next.format(formatted, funIndex, funIds, varIds) ::: elseBlock.next.format(formatted, funIndex, funIds, varIds) ::: recur)
+      case EndIf(_, returnValues) => node("end if") :: returnValues.map(dataEdge)
       case TupleIdx(tuple, idx) => node(s"tuple[$idx]") :: dataEdge(tuple) :: recur
       case ReadRef(ref) => node(s"val") :: dataEdge(ref) :: recur
       case WriteRef(ref, data) => node(s"ref = ") :: dataEdge(ref) :: dataEdgeSec(data) :: recur
@@ -138,79 +139,57 @@ abstract class Op {
       case ReadGlobal(global, idx) => node(s"global[${varIds(global)}][$idx]") :: recur
       case WriteGlobal(global, idx, data) => node(s"global[${varIds(global)}][$idx] = ") :: dataEdge(data) :: recur
       case RefGlobal(global, idx) => node(s"ref global[${varIds(global)}][$idx]") :: recur
+      case PrintI64(data) => node("printi64") :: dataEdge(data) :: recur
       case Call(Left(fun), values) => node(s"invoke[${funIds(fun)}]") :: (recur ::: values.map(dataEdge))
       case Call(Right(fun), values) => node("invoke") :: dataEdgeSec(fun) :: (recur ::: values.map(dataEdge))
-      case Entry() => node("entry") :: recur
       case Ret(returnValues) => node("return") :: returnValues.map(dataEdge)
     }
   } else List.empty
 }
 
-case class UnitLit() extends Op
-case class IntLit(var int: Long) extends Op
-case class BoolLit(var bool: Boolean) extends Op
-case class FunLit(var fun: Fun) extends Op
-case class TupleLit(var elements: List[Data]) extends Op
-case class AddInt(var addInts: List[Data], var subInts: List[Data]) extends Op
-case class AndInt(var ints: List[Data]) extends Op
-case class OrInt(var ints: List[Data]) extends Op
-case class XorInt(var ints: List[Data]) extends Op
-case class MultInt(var ints: List[Data]) extends Op
-case class DivInt(var dividend: Data, var divisor: Data) extends Op
-case class ModInt(var dividend: Data, var divisor: Data) extends Op
-case class IsGreater(var int: Data) extends Op
-case class IsGreaterOrZero(var int: Data) extends Op
-case class IsZero(var int: Data) extends Op
-case class IsNotZero(var int: Data) extends Op
-case class Branch(var condition: Data, var elseNext: Ctrl = null) extends Op
-case class Phi(var branch: Branch, var ifTrue: Data, var ifFalse: Data) extends Op
-case class TupleIdx(var tuple: Data, var idx: Int) extends Op
-case class ReadRef(var ref: Data) extends Op
-case class WriteRef(var ref: Data, var data: Data) extends Op
-case class RefValue(var data: Data) extends Op
-case class ReadLocal(var local: Int) extends Op
-case class WriteLocal(var local: Int, var data: Data) extends Op
-case class RefLocal(var local: Int) extends Op
-case class ReadGlobal(var global: Var, var idx: Int) extends Op
-case class WriteGlobal(var global: Var, var idx: Int, var data: Data) extends Op
-case class RefGlobal(var global: Var, var idx: Int) extends Op
-case class Call(var fun: Either[Fun, Data], var values: List[Data]) extends Op
-case class Entry() extends Op
+abstract class OpNext(var next: Ctrl = null) extends Op with HasNext
+
+case class UnitLit() extends OpNext
+case class IntLit(var int: Long) extends OpNext
+case class BoolLit(var bool: Boolean) extends OpNext
+case class FunLit(var fun: Fun) extends OpNext
+case class TupleLit(var elements: List[Data]) extends OpNext
+case class AddInt(var addInts: List[Data], var subInts: List[Data]) extends OpNext
+case class BitwiseInt(var bitwiseOp: BitwiseOp, var ints: List[Data]) extends OpNext
+case class MultInt(var ints: List[Data]) extends OpNext
+case class DivInt(var dividend: Data, var divisor: Data) extends OpNext
+case class CompInt(var compType: CompType, var int: Data) extends OpNext
+case class If(var condition: Data, var ifBlock: Block, var elseBlock: Block) extends OpNext
+case class EndIf(var ifNode: If, var returnValues: List[Data]) extends Op
+case class TupleIdx(var tuple: Data, var idx: Int) extends OpNext
+case class ReadRef(var ref: Data) extends OpNext
+case class WriteRef(var ref: Data, var data: Data) extends OpNext
+case class RefValue(var data: Data) extends OpNext
+case class ReadLocal(var local: Int) extends OpNext
+case class WriteLocal(var local: Int, var data: Data) extends OpNext
+case class RefLocal(var local: Int) extends OpNext
+case class ReadGlobal(var global: Var, var idx: Int) extends OpNext
+case class WriteGlobal(var global: Var, var idx: Int, var data: Data) extends OpNext
+case class RefGlobal(var global: Var, var idx: Int) extends OpNext
+case class PrintI64(var data: Data) extends OpNext
+case class Call(var fun: Either[Fun, Data], var values: List[Data]) extends OpNext
 case class Ret(var returnValues: List[Data]) extends Op
 
-abstract class Fun {
+class Fun(var next: Ctrl = null, var signature: FunDatatype = null, var localVars: List[Datatype] = null) extends HasNext {
   val id: Long = OptUnit.nextId
 
-  def signature: FunDatatype
-
-  def formatParams(funIndex: Int): List[String] = Range(0, signature.params.length).toList.flatMap { index =>
-    List(s"Par_${funIndex}_$index [shape = diamond, label = \"parameter[$index]\"]", s"Fun_$funIndex -> Par_${funIndex}_$index [color = green]")
-  }
-
-  def format(index: Int, funIds: Map[Fun, Int], varIds: Map[Var, Int]): String
+  def format(index: Int, funIds: Map[Fun, Int], varIds: Map[Var, Int]): String = graph(s"Fun_$index [shape = box, label = \"function[$index]\"]" :: s"Fun_$index -> Op_${next.id} [color = orange]" :: Range(0, signature.params.length).toList.flatMap { paramIndex =>
+    List(s"Par_${index}_$paramIndex [shape = diamond, label = \"parameter[$paramIndex]\"]", s"Fun_$index -> Par_${index}_$paramIndex [color = green]")
+  } ::: next.format(mutable.Set(), index, funIds, varIds))
 }
 
-class CodeFun(var entry: Entry = null, var signature: FunDatatype = null, var localVars: List[Datatype] = null) extends Fun {
-  def format(index: Int, funIds: Map[Fun, Int], varIds: Map[Var, Int]): String = graph(s"Fun_$index [shape = box, label = \"function[$index]\"]" :: s"Fun_$index -> Op_${entry.id} [color = orange]" :: formatParams(index) ::: entry.format(mutable.Set(), index, funIds, varIds))
-}
-
-class AsmFun(val instr: List[gen.Instr], val signature: FunDatatype) extends Fun {
-  def format(index: Int, funIds: Map[Fun, Int], varIds: Map[Var, Int]): String = graph(List(s"Fun_$index [shape = box, label = \"asm function[$index]\"]"))
-}
-
-class Var(var entry: Entry = null, var localVars: List[Datatype] = null) {
+class Var(var next: Ctrl = null, var localVars: List[Datatype] = null) extends HasNext {
   val id: Long = OptUnit.nextId
 
-  def format(index: Int, funIds: Map[Fun, Int], varIds: Map[Var, Int]): String = graph(s"Var_$index [shape = diamond, label = \"global[$index]\"]" :: s"Var_$index -> Op_${entry.id} [color = orange]" :: entry.format(mutable.Set(), 0, funIds, varIds))
+  def format(index: Int, funIds: Map[Fun, Int], varIds: Map[Var, Int]): String = graph(s"Var_$index [shape = diamond, label = \"global[$index]\"]" :: s"Var_$index -> Op_${next.id} [color = orange]" :: next.format(mutable.Set(), 0, funIds, varIds))
 }
 
-case class BssElement(size: Int, align: Int)
-case class ConstElement(strings: List[String], size: Int, align: Int)
-case class DataElement(strings: List[String], size: Int, align: Int)
-
-case class StaticData(bss: Map[String, BssElement], const: Map[String, ConstElement], data: Map[String, DataElement], windowsFunctions: List[String])
-
-class OptUnit(var funs: List[Fun], var vars: List[Var], val staticData: StaticData) {
+class OptUnit(var mainFun: Fun, var funs: List[Fun], var vars: List[Var]) {
   def format(): String = {
     val funIds: Map[Fun, Int] = funs.zipWithIndex.toMap
     val varIds: Map[Var, Int] = vars.zipWithIndex.toMap

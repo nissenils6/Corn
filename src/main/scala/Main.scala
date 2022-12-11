@@ -129,7 +129,9 @@ def parseArgs(args: List[(FilePosRange, String)], parsedArgs: ParsedArgs): Parse
       opt.funExprInline(optUnit)
       opt.inlineFunctions(optUnit)
       opt.localVarInline(optUnit)
+//      opt.returnValueOptimizer(optUnit)
       opt.deadCodeElimination(optUnit)
+      opt.deadBlockElimination(optUnit)
       printFile(filePath + ".opt_graph_1.txt", optUnit.format())
       Process(s"dot -Tsvg $filePath.opt_graph_1.txt -o $filePath.opt_graph_1.svg").!(ProcessLogger(_ => ()))
     }

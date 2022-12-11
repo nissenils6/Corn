@@ -2,7 +2,6 @@ package sem
 
 import core.*
 import gen.*
-import opt.{BssElement, CodeFun}
 
 import scala.collection.mutable
 
@@ -54,15 +53,13 @@ class UserGlobalVarInit(module: => Module, expr: syn.Expr, pattern: => Pattern[U
 
   def generateIr(globalVar: opt.Var, context: IrGenContext): Unit = {
     val localVars = analyzedExpr.gatherLocals
-    val entry = opt.Entry()
-    val (firstExprOp: opt.Op, lastExprOp: opt.Op) = analyzedExpr.generateIr(context, localVars.zipWithIndex.toMap)
+    val (firstExprOp: opt.Op, lastExprOp: opt.OpNext) = analyzedExpr.generateIr(context, localVars.zipWithIndex.toMap)
     val patternOps = Pattern.generateIrGlobal(analyzedPattern, opt.Data(lastExprOp), context)
     val retOp = opt.Ret(List())
     val firstPatternOp = opt.linkOps(retOp)(patternOps)
 
-    entry.next = firstExprOp
     lastExprOp.next = firstPatternOp
-    globalVar.entry = entry
+    globalVar.next = firstExprOp
     globalVar.localVars = localVars.map(_.datatype.optDatatype)
   }
 
@@ -186,21 +183,19 @@ class UserFun(val module: Module, parameters: List[syn.Pattern], retTypeExpr: Op
 
   override def generateInlineCode(ctx: ExprCodeGenContext): Boolean = false
 
-  def generateIr(fun: opt.CodeFun, context: IrGenContext): Unit = {
+  def generateIr(fun: opt.Fun, context: IrGenContext): Unit = {
     val localVarsList = analyzedExpr.gatherLocals.concat(params.values)
     val localVars = localVarsList.zipWithIndex.toMap
     val paramOps = args.zipWithIndex.flatMap { case (pattern, index) =>
       Pattern.generateIrLocal(pattern, opt.Data(None, index), localVars)
     }
-    val entry = opt.Entry()
-    val (firstExprOp: opt.Op, lastExprOp: opt.Op) = analyzedExpr.generateIr(context, localVars)
+    val (firstExprOp: opt.Op, lastExprOp: opt.OpNext) = analyzedExpr.generateIr(context, localVars)
     val retOp = opt.Ret(List(opt.Data(lastExprOp)))
     val firstParamOp = opt.linkOps(firstExprOp)(paramOps)
 
-    entry.next = firstParamOp
     lastExprOp.next = retOp
 
-    fun.entry = entry
+    fun.next = firstParamOp
     fun.localVars = localVarsList.map(_.datatype.optDatatype)
     fun.signature = signature.optDatatype.asInstanceOf[opt.FunDatatype]
   }
@@ -213,67 +208,6 @@ class UserFun(val module: Module, parameters: List[syn.Pattern], retTypeExpr: Op
     funs.add(this)
     analyzedExpr.gatherFuns(funs)
   }
-}
-
-object IrGenBuiltin {
-  val bssSection: Map[String, BssElement] = Map(
-    "println_buffer" -> BssElement(32, 1)
-  )
-
-  val constSection: Map[String, opt.ConstElement] = Map(
-
-  )
-
-  val dataSection: Map[String, opt.DataElement] = Map(
-
-  )
-
-  val windowsFunctions: List[String] = List("GetStdHandle", "WriteFile")
-
-  val printlnFun: opt.AsmFun = opt.AsmFun(List(
-    Load(Reg.RAX, Address(Reg.RBP)),
-    Lea(Reg.RBX, Address("println_buffer") + 32),
-    Sub(Reg.RBX, 1),
-    StoreImm(Address(Reg.RBX), 10, RegSize.Byte),
-
-    Mov(Reg.RSI, Reg.RAX),
-    Cmp(Reg.RAX, 0),
-    DirCondJump("println_no_neg", Flag.GreaterOrEqual),
-    Neg(Reg.RAX),
-
-    Label("println_no_neg"),
-    LoadImm(Reg.RCX, 10, RegSize.QWord),
-
-    Label("println_loop"),
-    Xor(Reg.RDX, Reg.RDX),
-    Idiv(Reg.RCX),
-    Add(Reg.RDX, 48),
-    Sub(Reg.RBX, 1),
-    Store(Address(Reg.RBX), Reg.RDX, RegSize.Byte),
-    Cmp(Reg.RAX, 0),
-    DirCondJump("println_loop", Flag.Greater),
-
-    Cmp(Reg.RSI, 0),
-    DirCondJump("println_no_minus", Flag.GreaterOrEqual),
-    Sub(Reg.RBX, 1),
-    StoreImm(Address(Reg.RBX), 45, RegSize.Byte),
-
-    Label("println_no_minus"),
-    Sub(Reg.RSP, 48),
-    LoadImm(Reg.RCX, -11),
-    IndCall(Address("GetStdHandle")),
-    Mov(Reg.RCX, Reg.RAX),
-    Mov(Reg.RDX, Reg.RBX),
-    Lea(Reg.R8, Address("println_buffer") + 32),
-    Sub(Reg.R8, Reg.RBX),
-    Lea(Reg.R9, Reg.RSP + 32),
-    StoreImm(Reg.RSP + 32, 0),
-    IndCall(Address("WriteFile")),
-    Add(Reg.RSP, 48),
-    Ret()
-  ), opt.FunDatatype(List(opt.IntDatatype), List(opt.UnitDatatype)))
-
-  val staticData: opt.StaticData = opt.StaticData(bssSection, constSection, dataSection, windowsFunctions)
 }
 
 case class IrGenContext(funs: Map[Fun, opt.Fun], globalVars: Map[GlobalVar, (opt.Var, Int)]) {
@@ -310,14 +244,14 @@ class Module(val file: File, fileContent: => (Map[String, List[GlobalVar]], List
       (t1, t2)
     }.unzip
 
-    for (v <- vars.values.flatten) v match {
+    vars.values.flatten.foreach {
       case builtin: BuiltinGlobalVar => builtin.constVal.get.gatherFuns(funs)
       case _ => ()
     }
 
     val codeFuns = funs.map {
       case userFun: UserFun =>
-        val codeFun = new CodeFun()
+        val codeFun = new opt.Fun()
         (userFun, codeFun)
       case builtinFun: BuiltinFun =>
         (builtinFun, builtinFun.generateIr)
@@ -326,16 +260,14 @@ class Module(val file: File, fileContent: => (Map[String, List[GlobalVar]], List
 
     val builtinVars: List[(BuiltinGlobalVar, (opt.Var, Int))] = vars.values.flatten.collect { case builtin: BuiltinGlobalVar if builtin.datatype.runtime && builtin.constVal.nonEmpty =>
       val optVar = new opt.Var()
-      val entry = opt.Entry()
-      val (firstConstOp: opt.Op, lastConstOp: opt.Op) = builtin.constVal.get.generateIr(funsMap).toGraph
+      val (firstConstOp: opt.Op, lastConstOp: opt.OpNext) = builtin.constVal.get.generateIr(funsMap).toGraph
       val writeOp = opt.WriteGlobal(optVar, 0, opt.Data(lastConstOp))
       val retOp = opt.Ret(List())
 
-      entry.next = lastConstOp
       lastConstOp.next = writeOp
       writeOp.next = retOp
 
-      optVar.entry = entry
+      optVar.next = firstConstOp
       optVar.localVars = List()
 
       (builtin, (optVar, 0))
@@ -348,11 +280,18 @@ class Module(val file: File, fileContent: => (Map[String, List[GlobalVar]], List
       varInit.generateIr(optVar, context)
     }
 
-    for (t <- codeFuns) t match {
-      case (userFun: UserFun, codeFun: CodeFun) => userFun.generateIr(codeFun, context)
+    codeFuns.foreach {
+      case (userFun: UserFun, codeFun: opt.Fun) => userFun.generateIr(codeFun, context)
       case _ => ()
     }
 
-    opt.OptUnit(funsMap.values.toList, optVars.map(_._2).concat(builtinVars.map(_._2._1)), IrGenBuiltin.staticData)
+    opt.OptUnit(vars("main").find(_.datatype match {
+      case FunDatatype(List(), UnitDatatype(_), _) => true
+      case _ => false
+    }) match {
+      case Some(globalVar: GlobalVar) => globalVar.constVal match {
+        case Some(ConstFunction(fun)) => funsMap(fun)
+      }
+    }, funsMap.values.toList, optVars.map(_._2).concat(builtinVars.map(_._2._1)))
   }
 }
