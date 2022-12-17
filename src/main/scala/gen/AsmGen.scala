@@ -363,11 +363,3 @@ object AsmGen {
     override def toString: String = if count > 0 then s"$builder\n" else ""
   }
 }
-
-case class Bss()
-case class Const()
-case class Data()
-
-case class AsmGenState() {
-  
-}

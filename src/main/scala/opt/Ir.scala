@@ -1,20 +1,41 @@
 package opt
 
-import gen.AsmGen.label
-import sem.IrGenContext
+import core.roundUp
 
 import scala.collection.mutable
 
 abstract class Datatype {
-
+  val (size, align) = this match {
+    case UnitDatatype => (0, 1)
+    case IntDatatype => (8, 8)
+    case BoolDatatype => (8, 8)
+    case RefDatatype(_) => (8, 8)
+    case FunDatatype(_, _) => (8, 8)
+    case TupleDatatype(elements) =>
+      val (size, align, _) = tupleLayout(elements)
+      (size, align)
+  }
 }
 
 case object UnitDatatype extends Datatype
 case object IntDatatype extends Datatype
 case object BoolDatatype extends Datatype
 case class RefDatatype(datatype: Datatype) extends Datatype
-case class TupleDatatype(elements: List[Datatype]) extends Datatype
 case class FunDatatype(params: List[Datatype], returnTypes: List[Datatype]) extends Datatype
+case class TupleDatatype(elements: List[Datatype]) extends Datatype
+
+def tupleLayout(datatypes: List[Datatype]): (Int, Int, List[Int]) = {
+  var curSize = 0
+  var maxAlign = 1
+  val offsets = for (datatype <- datatypes) yield {
+    val offset = curSize.roundUp(datatype.align)
+    curSize = offset + datatype.size
+    maxAlign = maxAlign.max(datatype.align)
+    offset
+  }
+
+  (curSize.roundUp(maxAlign), maxAlign, offsets)
+}
 
 abstract class ConstVal {
   def toGraph: (Op, OpNext) = this match {
@@ -97,12 +118,37 @@ trait HasNext {
 
 case class Block(var next: Ctrl = null) extends HasNext
 
-abstract class Op {
-  val id = OptUnit.nextId
-  
-  def format(formatted: mutable.Set[Long], funIndex: Int, funIds: Map[Fun, Int], varIds: Map[Var, Int]): List[String] = if (!formatted.contains(id)) {
-    formatted.add(id)
+class AbstractAsmContext {
+  val data: mutable.Map[Data, (Option[asm.Src], Datatype)] = mutable.Map.empty
+  private var regCounter = 0
+  private var localCounter = 0
+  private var globalCounter = 0
 
+  def reg: Int = {
+    val r = regCounter
+    regCounter += 1
+    r
+  }
+
+  def local(size: Int, align: Int = 8): Int = {
+    localCounter = localCounter.roundUp(align)
+    val l = localCounter
+    localCounter += size
+    l
+  }
+
+  def global(size: Int, align: Int = 8): Int = {
+    globalCounter = globalCounter.roundUp(align)
+    val l = globalCounter
+    globalCounter += size
+    l
+  }
+}
+
+abstract class Op {
+  val id: Long = OptUnit.nextId
+
+  def format(funIndex: Int, funIds: Map[Fun, Int], varIds: Map[Var, Int]): List[String] = {
     val node = graphNode(this)
     val dataEdge = graphDataEdge(this, funIndex)("purple")("")
     val dataEdgeSec = graphDataEdge(this, funIndex)("blue")("")
@@ -112,7 +158,7 @@ abstract class Op {
     val ctrlEdgeElse = graphCtrlEdge(this)("green")
 
     def recur: List[String] = this match {
-      case hasNext: HasNext => ctrlEdge(hasNext.next) :: hasNext.next.format(formatted, funIndex, funIds, varIds)
+      case hasNext: HasNext => ctrlEdge(hasNext.next) :: hasNext.next.format(funIndex, funIds, varIds)
       case _ => List()
     }
 
@@ -127,7 +173,7 @@ abstract class Op {
       case MultInt(ints) => node("*") :: (recur ::: ints.map(dataEdge))
       case DivInt(dividend, divisor) => node("/") :: dataEdgeLabel("Dividend")(dividend) :: dataEdgeLabel("Divisor")(divisor) :: recur
       case CompInt(compType, int) => node(compType.string) :: dataEdge(int) :: recur
-      case If(condition, ifBlock, elseBlock) => node("if") :: dataEdge(condition) :: ctrlEdgeIf(ifBlock.next) :: ctrlEdgeElse(elseBlock.next) :: (ifBlock.next.format(formatted, funIndex, funIds, varIds) ::: elseBlock.next.format(formatted, funIndex, funIds, varIds) ::: recur)
+      case If(condition, ifBlock, elseBlock) => node("if") :: dataEdge(condition) :: ctrlEdgeIf(ifBlock.next) :: ctrlEdgeElse(elseBlock.next) :: (ifBlock.next.format(funIndex, funIds, varIds) ::: elseBlock.next.format(funIndex, funIds, varIds) ::: recur)
       case EndIf(_, returnValues) => node("end if") :: returnValues.map(dataEdge)
       case TupleIdx(tuple, idx) => node(s"tuple[$idx]") :: dataEdge(tuple) :: recur
       case ReadRef(ref) => node(s"val") :: dataEdge(ref) :: recur
@@ -144,7 +190,42 @@ abstract class Op {
       case Call(Right(fun), values) => node("invoke") :: dataEdgeSec(fun) :: (recur ::: values.map(dataEdge))
       case Ret(returnValues) => node("return") :: returnValues.map(dataEdge)
     }
-  } else List.empty
+  }
+
+  def generateAbstractAsm(context: AbstractAsmContext) = this match
+    case UnitLit() =>
+      context.data(Data(this)) = (None, UnitDatatype)
+    case IntLit(int) =>
+      context.data(Data(this)) = (Some(asm.Imm(int)), IntDatatype)
+    case BoolLit(bool) =>
+      context.data(Data(this)) = (Some(asm.Imm(if bool then 1 else 0)), BoolDatatype)
+    case FunLit(fun) =>
+      context.data(Data(this)) = (Some(asm.Lab(s"F${fun.id}")), fun.signature)
+    case TupleLit(elements) =>
+      val tupleType = TupleDatatype(elements.map(e => context.data(e)._2))
+      val local = context.local(tupleType.size, tupleType.align)
+
+    case AddInt(addInts, subInts) => ???
+    case BitwiseInt(bitwiseOp, ints) => ???
+    case MultInt(ints) => ???
+    case DivInt(dividend, divisor) => ???
+    case CompInt(compType, int) => ???
+    case If(condition, ifBlock, elseBlock) => ???
+    case EndIf(_, returnValues) => ???
+    case TupleIdx(tuple, idx) => ???
+    case ReadRef(ref) => ???
+    case WriteRef(ref, data) => ???
+    case RefValue(data) => ???
+    case ReadLocal(local) => ???
+    case WriteLocal(local, data) => ???
+    case RefLocal(local) => ???
+    case ReadGlobal(global, idx) => ???
+    case WriteGlobal(global, idx, data) => ???
+    case RefGlobal(global, idx) => ???
+    case PrintI64(data) => ???
+    case Call(Left(fun), values) => ???
+    case Call(Right(fun), values) => ???
+    case Ret(returnValues) => ???
 }
 
 abstract class OpNext(var next: Ctrl = null) extends Op with HasNext
@@ -180,13 +261,13 @@ class Fun(var next: Ctrl = null, var signature: FunDatatype = null, var localVar
 
   def format(index: Int, funIds: Map[Fun, Int], varIds: Map[Var, Int]): String = graph(s"Fun_$index [shape = box, label = \"function[$index]\"]" :: s"Fun_$index -> Op_${next.id} [color = orange]" :: Range(0, signature.params.length).toList.flatMap { paramIndex =>
     List(s"Par_${index}_$paramIndex [shape = diamond, label = \"parameter[$paramIndex]\"]", s"Fun_$index -> Par_${index}_$paramIndex [color = green]")
-  } ::: next.format(mutable.Set(), index, funIds, varIds))
+  } ::: next.format(index, funIds, varIds))
 }
 
 class Var(var next: Ctrl = null, var localVars: List[Datatype] = null) extends HasNext {
   val id: Long = OptUnit.nextId
 
-  def format(index: Int, funIds: Map[Fun, Int], varIds: Map[Var, Int]): String = graph(s"Var_$index [shape = diamond, label = \"global[$index]\"]" :: s"Var_$index -> Op_${next.id} [color = orange]" :: next.format(mutable.Set(), 0, funIds, varIds))
+  def format(index: Int, funIds: Map[Fun, Int], varIds: Map[Var, Int]): String = graph(s"Var_$index [shape = diamond, label = \"global[$index]\"]" :: s"Var_$index -> Op_${next.id} [color = orange]" :: next.format(0, funIds, varIds))
 }
 
 class OptUnit(var mainFun: Fun, var funs: List[Fun], var vars: List[Var]) {

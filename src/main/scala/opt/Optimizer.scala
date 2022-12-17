@@ -278,8 +278,7 @@ def inlineFunctions(optUnit: OptUnit): Boolean = {
     case Call(Left(fun: Fun), _) => funs.add(fun)
     case _ => ()
   }
-
-
+  
   def inlineFunction(params: Map[Int, Data], opMap: mutable.Map[Long, Op], newLocalsOffset: Int, newRetsOffset: Int, nextCtrl: Ctrl, hasNext: HasNext): Op = {
     def recur(newHasNext: HasNext) = inlineFunction(params, opMap, newLocalsOffset, newRetsOffset, nextCtrl, newHasNext)
 
@@ -379,45 +378,6 @@ def inlineFunctions(optUnit: OptUnit): Boolean = {
 
   optUnit.funs.foreach { fun =>
     scanForInline(fun, Right(fun))
-  }
-
-  false
-}
-
-def returnValueOptimizer(optUnit: OptUnit): Boolean = {
-  def handleReturnValue(datatype: Datatype, data: Data, additionalOps: mutable.Buffer[OpNext], newReturnValues: mutable.Buffer[Data]): Unit = datatype match {
-    case UnitDatatype => ()
-    case TupleDatatype(elements) => (0 to elements.length).foreach { idx =>
-      val tupleIdx = TupleIdx(data, idx)
-      additionalOps.append(tupleIdx)
-      handleReturnValue(datatype, Data(tupleIdx), additionalOps, newReturnValues)
-    }
-    case _ => newReturnValues.append(data)
-  }
-
-  def findReturns(hasNext: HasNext, returnTypes: List[Datatype]): Unit = visitOpsAndPrev(hasNext) {
-    case (prev, ret@Ret(returnValues)) =>
-      val additionalOps = mutable.Buffer[OpNext]()
-      val newReturnValues = mutable.Buffer[Data]()
-      returnValues.zip(returnTypes).foreach { case (returnValue, returnType) =>
-        handleReturnValue(returnType, returnValue, additionalOps, newReturnValues)
-      }
-      val firstOp = linkOps(ret)(additionalOps.toList)
-      prev.next = firstOp
-      ret.returnValues = newReturnValues.toList
-      true
-    case _ => false
-  }
-
-  def flattenDatatypes(datatypes: List[Datatype]): List[Datatype] = datatypes.flatMap {
-    case UnitDatatype => List()
-    case TupleDatatype(elements) => flattenDatatypes(elements)
-    case datatype => List(datatype)
-  }
-
-  optUnit.funs.foreach { fun =>
-    findReturns(fun, fun.signature.returnTypes)
-    fun.signature = FunDatatype(fun.signature.params, flattenDatatypes(fun.signature.returnTypes))
   }
 
   false
