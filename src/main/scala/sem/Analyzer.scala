@@ -11,7 +11,7 @@ type CompGraphOp = opt.Data => opt.OpNext
 
 def binaryOperatorGraph(graphOp: BinGraphOp, params: List[opt.Datatype], returnType: opt.Datatype, index: Int = 0): Option[opt.Fun] = {
   val op = graphOp(Data(None, 0), Data(None, 1))
-  val retOp = opt.Ret(List(Data(op)))
+  val retOp = opt.Ret(List(Data(Some(op), index)))
   op.next = retOp
 
   Some(new opt.Fun(op, opt.FunDatatype(params, List(returnType)), List()))
@@ -78,7 +78,7 @@ def divOperator(module: => Module, name: String, compileTimeFunction: (Long, Lon
       Store(Address(Reg.RBP), resultReg),
       Ret()
     ),
-    binaryOperatorGraph(opt.DivInt.apply, List(opt.IntDatatype, opt.IntDatatype), opt.IntDatatype),
+    binaryOperatorGraph(opt.DivInt.apply, List(opt.IntDatatype, opt.IntDatatype), opt.IntDatatype, index),
     ctx => {
       ctx.add(
         Load(Reg.RAX, Reg.RBP + ctx.secondaryOffset),
@@ -190,7 +190,7 @@ def builtinVars(module: => Module): List[GlobalVar] = List(
       )
     },
     {
-      val op = opt.PrintI64(Data(None, 0))
+      val op = opt.Print(Data(None, 0))
       val retOp = opt.Ret(List(Data(op)))
       op.next = retOp
 

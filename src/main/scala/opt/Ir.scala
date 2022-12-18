@@ -5,7 +5,7 @@ import core.roundUp
 import scala.collection.mutable
 
 abstract class Datatype {
-  val (size, align) = this match {
+  lazy val (size, align) = this match {
     case UnitDatatype => (0, 1)
     case IntDatatype => (8, 8)
     case BoolDatatype => (8, 8)
@@ -35,6 +35,21 @@ def tupleLayout(datatypes: List[Datatype]): (Int, Int, List[Int]) = {
   }
 
   (curSize.roundUp(maxAlign), maxAlign, offsets)
+}
+
+def generateCopyAsm(context: AbstractAsmContext, datatype: Datatype, dst: asm.Dst, src: asm.Src): Unit = datatype match {
+  case UnitDatatype => ()
+  case IntDatatype | RefDatatype(_) | FunDatatype(_, _) =>
+    context.instrs.append(asm.Mov(asm.DataSize.QWord, dst, src))
+  case BoolDatatype =>
+    context.instrs.append(asm.Mov(asm.DataSize.Byte, dst, src))
+  case TupleDatatype(elements) => (dst, src) match {
+    case (dstOff: asm.DstOff, srcOff: asm.DstOff) =>
+      val offsets = tupleLayout(elements)._3
+      elements.zip(offsets).foreach { case (subDatatype, offset) =>
+        generateCopyAsm(context, subDatatype, dstOff.offset(offset), srcOff.offset(offset))
+      }
+  }
 }
 
 abstract class ConstVal {
@@ -118,30 +133,44 @@ trait HasNext {
 
 case class Block(var next: Ctrl = null) extends HasNext
 
-class AbstractAsmContext {
+class AbstractAsmContext(optUnit: OptUnit) {
   val data: mutable.Map[Data, (Option[asm.Src], Datatype)] = mutable.Map.empty
-  private var regCounter = 0
-  private var localCounter = 0
-  private var globalCounter = 0
+  val instrs: mutable.Buffer[asm.Op] = mutable.Buffer.empty
 
-  def reg: Int = {
-    val r = regCounter
-    regCounter += 1
+  val funs: Map[Fun, Int] = optUnit.funs.zipWithIndex.toMap
+  val globalVars: Map[Var, Array[Int]] = optUnit.vars.map(v => (v, v.localVars.map(d => global(d.size, d.align)).toArray)).toMap
+
+  var localVars: Array[Int] = null
+
+  var regCount = 0
+  var localCount = 0
+  var globalCount = 0
+
+  def reg(): Int = {
+    val r = regCount
+    regCount += 1
     r
   }
 
   def local(size: Int, align: Int = 8): Int = {
-    localCounter = localCounter.roundUp(align)
-    val l = localCounter
-    localCounter += size
+    localCount = localCount.roundUp(align)
+    val l = localCount
+    localCount += size
     l
   }
 
   def global(size: Int, align: Int = 8): Int = {
-    globalCounter = globalCounter.roundUp(align)
-    val l = globalCounter
-    globalCounter += size
+    globalCount = globalCount.roundUp(align)
+    val l = globalCount
+    globalCount += size
     l
+  }
+
+  def reset(locals: List[Datatype]): Unit = {
+    regCount = 0
+    localCount = 0
+    globalCount = 0
+    localVars = locals.map(d => local(d.size, d.align)).toArray
   }
 }
 
@@ -185,47 +214,99 @@ abstract class Op {
       case ReadGlobal(global, idx) => node(s"global[${varIds(global)}][$idx]") :: recur
       case WriteGlobal(global, idx, data) => node(s"global[${varIds(global)}][$idx] = ") :: dataEdge(data) :: recur
       case RefGlobal(global, idx) => node(s"ref global[${varIds(global)}][$idx]") :: recur
-      case PrintI64(data) => node("printi64") :: dataEdge(data) :: recur
+      case Print(data) => node("printi64") :: dataEdge(data) :: recur
       case Call(Left(fun), values) => node(s"invoke[${funIds(fun)}]") :: (recur ::: values.map(dataEdge))
       case Call(Right(fun), values) => node("invoke") :: dataEdgeSec(fun) :: (recur ::: values.map(dataEdge))
       case Ret(returnValues) => node("return") :: returnValues.map(dataEdge)
     }
   }
 
-  def generateAbstractAsm(context: AbstractAsmContext) = this match
-    case UnitLit() =>
-      context.data(Data(this)) = (None, UnitDatatype)
-    case IntLit(int) =>
-      context.data(Data(this)) = (Some(asm.Imm(int)), IntDatatype)
-    case BoolLit(bool) =>
-      context.data(Data(this)) = (Some(asm.Imm(if bool then 1 else 0)), BoolDatatype)
-    case FunLit(fun) =>
-      context.data(Data(this)) = (Some(asm.Lab(s"F${fun.id}")), fun.signature)
-    case TupleLit(elements) =>
-      val tupleType = TupleDatatype(elements.map(e => context.data(e)._2))
-      val local = context.local(tupleType.size, tupleType.align)
-
-    case AddInt(addInts, subInts) => ???
-    case BitwiseInt(bitwiseOp, ints) => ???
-    case MultInt(ints) => ???
-    case DivInt(dividend, divisor) => ???
-    case CompInt(compType, int) => ???
-    case If(condition, ifBlock, elseBlock) => ???
-    case EndIf(_, returnValues) => ???
-    case TupleIdx(tuple, idx) => ???
-    case ReadRef(ref) => ???
-    case WriteRef(ref, data) => ???
-    case RefValue(data) => ???
-    case ReadLocal(local) => ???
-    case WriteLocal(local, data) => ???
-    case RefLocal(local) => ???
-    case ReadGlobal(global, idx) => ???
-    case WriteGlobal(global, idx, data) => ???
-    case RefGlobal(global, idx) => ???
-    case PrintI64(data) => ???
-    case Call(Left(fun), values) => ???
-    case Call(Right(fun), values) => ???
-    case Ret(returnValues) => ???
+  def generateAsm(context: AbstractAsmContext): Unit = {
+    this match {
+      case UnitLit() =>
+        context.data(Data(this)) = (None, UnitDatatype)
+      case IntLit(int) =>
+        context.data(Data(this)) = (Some(asm.Imm(int)), IntDatatype)
+      case BoolLit(bool) =>
+        context.data(Data(this)) = (Some(asm.Imm(if bool then 1 else 0)), BoolDatatype)
+      case FunLit(fun) =>
+        context.data(Data(this)) = (Some(asm.RefFun(context.funs(fun))), fun.signature)
+      case TupleLit(elements) =>
+        val tupleType = TupleDatatype(elements.map(data => context.data(data)._2))
+        val local = context.local(tupleType.size, tupleType.align)
+        elements.map(context.data.apply).zip(tupleLayout(tupleType.elements)._3).foreach {
+          case ((Some(src), datatype: Datatype), offset: Int) => generateCopyAsm(context, datatype, asm.Loc(local + offset), src)
+          case _ => ()
+        }
+        context.data(Data(this)) = (Some(asm.Loc(local)), tupleType)
+      case AddInt(List(a, b), List()) =>
+        val result = asm.Reg(context.reg())
+        val left = context.data(a)._1.get
+        val right = context.data(b)._1.get
+        context.data(Data(this)) = (Some(result), IntDatatype)
+        context.instrs.append(asm.Add(result, left, right))
+      case AddInt(List(a), List(b)) =>
+        val result = asm.Reg(context.reg())
+        val left = context.data(a)._1.get
+        val right = context.data(b)._1.get
+        context.data(Data(this)) = (Some(result), IntDatatype)
+        context.instrs.append(asm.Sub(result, left, right))
+      case AddInt(addInts, subInts) => ???
+      case BitwiseInt(bitwiseOp, ints) => ???
+      case MultInt(List(a, b)) =>
+        val result = asm.Reg(context.reg())
+        val left = context.data(a)._1.get
+        val right = context.data(b)._1.get
+        context.data(Data(this)) = (Some(result), IntDatatype)
+        context.instrs.append(asm.Mult(result, left, right))
+      case MultInt(ints) => ???
+      case DivInt(dividend, divisor) =>
+        val quotient = asm.Reg(context.reg())
+        val remainder = asm.Reg(context.reg())
+        val left = context.data(dividend)._1.get
+        val right = context.data(divisor)._1.get
+        context.data(Data(Some(this), 0)) = (Some(quotient), IntDatatype)
+        context.data(Data(Some(this), 1)) = (Some(remainder), IntDatatype)
+        context.instrs.append(asm.Div(Some(quotient), Some(remainder), left, right))
+      case CompInt(compType, int) => ???
+      case If(condition, ifBlock, elseBlock) => ???
+      case EndIf(_, returnValues) => ???
+      case TupleIdx(tuple, idx) =>
+        val (Some(src: asm.DstOff), datatype: TupleDatatype) = context.data(tuple)
+        val offset = tupleLayout(datatype.elements)._3(idx)
+        datatype.elements(idx) match {
+          case UnitDatatype =>
+            context.data(Data(this)) = (None, UnitDatatype)
+          case tupleDatatype: TupleDatatype =>
+            val result = asm.Loc(context.local(tupleDatatype.size, tupleDatatype.align))
+            context.data(Data(this)) = (Some(result), tupleDatatype)
+            generateCopyAsm(context, tupleDatatype, result, src.offset(offset))
+          case subDatatype: Datatype =>
+            val result = asm.Reg(context.reg())
+            context.data(Data(this)) = (Some(result), subDatatype)
+            generateCopyAsm(context, subDatatype, result, src.offset(offset))
+        }
+      case ReadRef(ref) => ???
+      case WriteRef(ref, data) => ???
+      case RefValue(data) => ???
+      case ReadLocal(local) => ???
+      case WriteLocal(local, data) => ???
+      case RefLocal(local) => ???
+      case ReadGlobal(global, idx) => ???
+      case WriteGlobal(global, idx, data) => ???
+      case RefGlobal(global, idx) => ???
+      case Print(data) =>
+        context.instrs.append(asm.Print(context.data(data)._1.get))
+      case Call(Left(fun), values) => ???
+      case Call(Right(fun), values) => ???
+      case Ret(returnValues) =>
+        context.instrs.append(asm.Ret(returnValues.flatMap(data => context.data(data)._1)))
+    }
+    this match {
+      case opNext: OpNext => opNext.next.generateAsm(context)
+      case _ => ()
+    }
+  }
 }
 
 abstract class OpNext(var next: Ctrl = null) extends Op with HasNext
@@ -252,7 +333,7 @@ case class RefLocal(var local: Int) extends OpNext
 case class ReadGlobal(var global: Var, var idx: Int) extends OpNext
 case class WriteGlobal(var global: Var, var idx: Int, var data: Data) extends OpNext
 case class RefGlobal(var global: Var, var idx: Int) extends OpNext
-case class PrintI64(var data: Data) extends OpNext
+case class Print(var data: Data) extends OpNext
 case class Call(var fun: Either[Fun, Data], var values: List[Data]) extends OpNext
 case class Ret(var returnValues: List[Data]) extends Op
 
@@ -275,6 +356,33 @@ class OptUnit(var mainFun: Fun, var funs: List[Fun], var vars: List[Var]) {
     val funIds: Map[Fun, Int] = funs.zipWithIndex.toMap
     val varIds: Map[Var, Int] = vars.zipWithIndex.toMap
     (funs.zipWithIndex.map { case (f, index) => f.format(index, funIds, varIds) } ::: vars.zipWithIndex.map { case (v, index) => v.format(index, funIds, varIds) }).mkString("digraph {\n", "\n", "\n}")
+  }
+
+  def generateAsm(): asm.Program = {
+    val context = new AbstractAsmContext(this)
+
+    val asmFuns = funs.map { fun =>
+      context.reset(fun.localVars)
+
+      fun.signature.params.zipWithIndex.foreach {
+        case (UnitDatatype, _) => ()
+        case (TupleDatatype(elements), idx) => context.data(Data(None, idx)) = (Some(asm.Mem(context.reg())), TupleDatatype(elements))
+        case (datatype, idx) => context.data(Data(None, idx)) = (Some(asm.Reg(context.reg())), datatype)
+      }
+
+      val params = context.regCount
+
+      val returnValues = fun.signature.returnTypes.count {
+        case UnitDatatype => false
+        case _ => true
+      }
+
+      fun.next.generateAsm(context)
+
+      new asm.Fun(context.instrs.toArray, params, returnValues, context.regCount, context.localCount)
+    }.toArray
+
+    new asm.Program(asmFuns, Array.empty)
   }
 }
 

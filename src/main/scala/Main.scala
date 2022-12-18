@@ -34,7 +34,9 @@ def time[T](expr: => T): (T, Long) = {
 
 def formatTime(nanos: Long): String = s"${Math.round(nanos / 1e5) / 10} ms"
 
-def window(title: String, inset: Int, string: String): String = {
+def window(title: String, string: String): String = {
+  val inset = 1
+
   val lines = string.split('\n')
   val width = lines.map(_.length).max
   val totalWidth = width + (inset * 2)
@@ -45,8 +47,9 @@ def window(title: String, inset: Int, string: String): String = {
 
   val topLine = s"+$topLineLeft $title $topLineRight+\n"
   val padLine = "|" + " " * totalWidth + "|\n"
+  val bottomLine = "+" + "-" * totalWidth + "+\n"
   val contentLines = lines.map(_.padTo(width, ' ')).map("|" + " " * inset + _ + " " * inset + "|\n")
-  "\n" + topLine + padLine * inset + contentLines.mkString + padLine * inset + topLine
+  "\n" + topLine + padLine * inset + contentLines.mkString + padLine * inset + bottomLine
 }
 
 def printFile(path: String, content: String): Unit = new PrintWriter(path) {
@@ -92,7 +95,7 @@ def parseArgs(args: List[(FilePosRange, String)], parsedArgs: ParsedArgs): Parse
   val parsedArgs = parseArgs(cmdArgs, ParsedArgs())
 
   if (parsedArgs.enabled(ParsedArgs.HELP)) {
-    println(window("HELP", 1, help))
+    println(window("HELP", help))
   }
 
   for {
@@ -103,7 +106,7 @@ def parseArgs(args: List[(FilePosRange, String)], parsedArgs: ParsedArgs): Parse
     (module, semTime) = time(analyzeFile(parsedFile, file))
     (optUnit, irTime) = time(module.generateIr())
   } {
-    if (parsedArgs.enabled(ParsedArgs.COMP_INFO)) println(window("COMPILATION INFO", 1, List(
+    if (parsedArgs.enabled(ParsedArgs.COMP_INFO)) println(window("COMPILATION INFO", List(
       s"Lexical Analyser runtime:                      ${formatTime(lexTime)}",
       s"Syntax Analyser runtime:                       ${formatTime(parseTime)}",
       s"Semantic Analyser runtime:                     ${formatTime(semTime)}",
@@ -127,13 +130,20 @@ def parseArgs(args: List[(FilePosRange, String)], parsedArgs: ParsedArgs): Parse
       Process(s"dot -Tsvg $filePath.opt_graph.txt -o $filePath.opt_graph.svg").!(ProcessLogger(_ => ()))
       opt.globalVarInline(optUnit)
       opt.funExprInline(optUnit)
+      printFile(filePath + ".opt_graph_2.txt", optUnit.format())
+      Process(s"dot -Tsvg $filePath.opt_graph_2.txt -o $filePath.opt_graph_2.svg").!(ProcessLogger(_ => ()))
       opt.inlineFunctions(optUnit)
       opt.localVarInline(optUnit)
-//      opt.returnValueOptimizer(optUnit)
+      opt.deadCodeElimination(optUnit)
+      opt.deadBlockElimination(optUnit)
+      opt.inlineFunctions(optUnit)
+      opt.localVarInline(optUnit)
       opt.deadCodeElimination(optUnit)
       opt.deadBlockElimination(optUnit)
       printFile(filePath + ".opt_graph_1.txt", optUnit.format())
       Process(s"dot -Tsvg $filePath.opt_graph_1.txt -o $filePath.opt_graph_1.svg").!(ProcessLogger(_ => ()))
+
+      println(window("ABSTRACT ASSEMBLY", optUnit.generateAsm().toString))
     }
 
     printFile(filePath + ".asm", AsmGen.toString)
@@ -147,5 +157,5 @@ def parseArgs(args: List[(FilePosRange, String)], parsedArgs: ParsedArgs): Parse
   case error: CompilerError =>
     error.printStackTrace()
     print("\n" * 4)
-    print(window("COMPILER ERROR", 1, error.toString))
+    print(window("COMPILER ERROR", error.toString))
 }

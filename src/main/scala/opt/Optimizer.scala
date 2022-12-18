@@ -3,7 +3,8 @@ package opt
 import sem.GlobalVar
 
 import scala.annotation.tailrec
-import scala.collection.mutable
+import scala.collection.{immutable, mutable}
+import scala.{:+, ::}
 
 object ConstExpr {
   def unapply(data: Data): Option[ConstVal] = data match {
@@ -125,7 +126,7 @@ def visitData(prev: HasNext)(f: Data => Unit): Unit = visitOps(prev) {
     f(node.data)
   case node: WriteGlobal =>
     f(node.data)
-  case node: PrintI64 =>
+  case node: Print =>
     f(node.data)
   case node: Call =>
     node.fun.foreach(f)
@@ -167,7 +168,7 @@ def visitAndMapData(prev: HasNext)(f: Data => Data): Unit = visitOps(prev) {
     node.data = f(node.data)
   case node: WriteGlobal =>
     node.data = f(node.data)
-  case node: PrintI64 =>
+  case node: Print =>
     node.data = f(node.data)
   case node: Call =>
     node.fun = node.fun.map(f)
@@ -182,7 +183,7 @@ def mapDataflow(dataflowMap: collection.Map[Data, Data])(data: Data): Data = if 
 def isPure(op: Op): Boolean = op match {
   case UnitLit() | IntLit(_) | BoolLit(_) | FunLit(_) | TupleLit(_) | AddInt(_, _) | BitwiseInt(_, _) | MultInt(_) | DivInt(_, _)
        | CompInt(_, _) | TupleIdx(_, _) | ReadRef(_) | RefValue(_) | ReadLocal(_) | RefLocal(_) | ReadGlobal(_, _) | RefGlobal(_, _) => true
-  case If(_, _, _) | EndIf(_, _) | WriteRef(_, _) | WriteLocal(_, _) | WriteGlobal(_, _, _) | PrintI64(_) | Call(_, _) | Ret(_) => false
+  case If(_, _, _) | EndIf(_, _) | WriteRef(_, _) | WriteLocal(_, _) | WriteGlobal(_, _, _) | Print(_) | Call(_, _) | Ret(_) => false
 }
 
 def globalVarInline(optUnit: OptUnit): Boolean = {
@@ -193,7 +194,7 @@ def globalVarInline(optUnit: OptUnit): Boolean = {
       case _ => None
     }
   } yield (globalVar, constVal)).toMap
-  
+
   optUnit.funs.foreach { fun =>
     val dataflowMap = mutable.Map[Data, Data]()
     visitOps(fun) {
@@ -235,7 +236,7 @@ def localVarInline(optUnit: OptUnit): Boolean = {
     case _ => ()
   }
 
-  def replaceSingleAssignLocals(hasNext: HasNext, locals: mutable.Map[Int, Data], dataflowMap: mutable.Map[Data, Data]): Unit = visitOpsAndPrev(hasNext) {
+  def replaceSingleAssignLocals(hasNext: HasNext, locals: mutable.Map[Int, Data], newLocals: Map[Int, Int], dataflowMap: mutable.Map[Data, Data]): Unit = visitOpsAndPrev(hasNext) {
     case (op, writeOp@WriteLocal(local, _)) if locals.contains(local) =>
       op.next = writeOp.next
       true
@@ -243,6 +244,15 @@ def localVarInline(optUnit: OptUnit): Boolean = {
       dataflowMap(Data(readOp)) = locals(local)
       op.next = readOp.next
       true
+    case (_, readOp: ReadLocal) =>
+      readOp.local = newLocals(readOp.local)
+      false
+    case (_, writeOp: WriteLocal) =>
+      writeOp.local = newLocals(writeOp.local)
+      false
+    case (_, refOp: RefLocal) =>
+      refOp.local = newLocals(refOp.local)
+      false
     case _ => false
   }
 
@@ -250,23 +260,37 @@ def localVarInline(optUnit: OptUnit): Boolean = {
     val locals = mutable.Map[Int, Data]()
     val dataflowMap = mutable.Map[Data, Data]()
     findSingleAssignLocals(fun, locals, mutable.Set())
-    replaceSingleAssignLocals(fun, locals, dataflowMap)
+    val newLocals = fun.localVars.indices.foldLeft(immutable.TreeMap[Int, Int]()) {
+      case (map, idx) if locals.contains(idx) => map
+      case (map, idx) => map + ((idx, map.size))
+    }
+    replaceSingleAssignLocals(fun, locals, newLocals, dataflowMap)
     visitAndMapData(fun)(mapDataflow(dataflowMap))
+    fun.localVars = fun.localVars.zipWithIndex.filter { case (_, idx) =>
+      newLocals.contains(idx)
+    }.map(_._1)
   }
 
   optUnit.vars.foreach { globalVar =>
     val locals = mutable.Map[Int, Data]()
     val dataflowMap = mutable.Map[Data, Data]()
     findSingleAssignLocals(globalVar, locals, mutable.Set())
-    replaceSingleAssignLocals(globalVar, locals, dataflowMap)
+    val newLocals = globalVar.localVars.indices.foldLeft(immutable.TreeMap[Int, Int]()) {
+      case (map, idx) if locals.contains(idx) => map
+      case (map, idx) => map + ((idx, map.size))
+    }
+    replaceSingleAssignLocals(globalVar, locals, newLocals, dataflowMap)
     visitAndMapData(globalVar)(mapDataflow(dataflowMap))
+    globalVar.localVars = globalVar.localVars.zipWithIndex.filter { case (_, idx) =>
+      newLocals.contains(idx)
+    }.map(_._1)
   }
 
   false
 }
 
 def inlineFunctions(optUnit: OptUnit): Boolean = {
-  val INLINE_THRESHOLD = 15
+  val INLINE_THRESHOLD = 25
 
   val functionsToInline = mutable.Map[Fun, Int]()
 
@@ -278,7 +302,7 @@ def inlineFunctions(optUnit: OptUnit): Boolean = {
     case Call(Left(fun: Fun), _) => funs.add(fun)
     case _ => ()
   }
-  
+
   def inlineFunction(params: Map[Int, Data], opMap: mutable.Map[Long, Op], newLocalsOffset: Int, newRetsOffset: Int, nextCtrl: Ctrl, hasNext: HasNext): Op = {
     def recur(newHasNext: HasNext) = inlineFunction(params, opMap, newLocalsOffset, newRetsOffset, nextCtrl, newHasNext)
 
@@ -315,7 +339,7 @@ def inlineFunctions(optUnit: OptUnit): Boolean = {
       case oldOp@ReadGlobal(global, idx) => newNode(oldOp, ReadGlobal(global, idx))
       case oldOp@WriteGlobal(global, idx, data) => newNode(oldOp, WriteGlobal(global, idx, mapData(data)))
       case oldOp@RefGlobal(global, idx) => newNode(oldOp, RefGlobal(global, idx))
-      case oldOp@PrintI64(data) => newNode(oldOp, PrintI64(mapData(data)))
+      case oldOp@Print(data) => newNode(oldOp, Print(mapData(data)))
       case oldOp@Call(Left(fun), values) => newNode(oldOp, Call(Left(fun), values.map(mapData)))
       case oldOp@Call(Right(fun), values) => newNode(oldOp, Call(Right(mapData(fun)), values.map(mapData)))
       case Ret(returnValues) =>
