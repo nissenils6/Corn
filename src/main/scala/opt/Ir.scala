@@ -1,7 +1,9 @@
 package opt
 
+import asm.Src
 import core.roundUp
 
+import scala.annotation.tailrec
 import scala.collection.mutable
 
 abstract class Datatype {
@@ -119,11 +121,11 @@ enum BitwiseOp(val string: String) {
   case Xor extends BitwiseOp("^")
 }
 
-enum CompType(val string: String) {
-  case Pos extends CompType(">0")
-  case PosOrZero extends CompType(">=0")
-  case Zero extends CompType("==0")
-  case NotZero extends CompType("!=0")
+enum CompType(val string: String, val condType: asm.CondType) {
+  case Pos extends CompType(">0", asm.CondType.Gt)
+  case PosOrZero extends CompType(">=0", asm.CondType.Gte)
+  case Zero extends CompType("==0", asm.CondType.Eq)
+  case NotZero extends CompType("!=0", asm.CondType.Neq)
 }
 
 trait HasNext {
@@ -135,16 +137,20 @@ case class Block(var next: Ctrl = null) extends HasNext
 
 class AbstractAsmContext(optUnit: OptUnit) {
   val data: mutable.Map[Data, (Option[asm.Src], Datatype)] = mutable.Map.empty
-  val instrs: mutable.Buffer[asm.Op] = mutable.Buffer.empty
 
   val funs: Map[Fun, Int] = optUnit.funs.zipWithIndex.toMap
   val globalVars: Map[Var, Array[Int]] = optUnit.vars.map(v => (v, v.localVars.map(d => global(d.size, d.align)).toArray)).toMap
 
+  var instrs: mutable.Buffer[asm.Op] = mutable.Buffer.empty
   var localVars: Array[Int] = null
 
   var regCount = 0
   var localCount = 0
   var globalCount = 0
+
+  def src(d: Data): Src = data(d)._1.get
+  def srcOption(d: Data): Option[Src] = data(d)._1
+  def datatype(d: Data): Datatype = data(d)._2
 
   def reg(): Int = {
     val r = regCount
@@ -166,11 +172,23 @@ class AbstractAsmContext(optUnit: OptUnit) {
     l
   }
 
-  def reset(locals: List[Datatype]): Unit = {
+  def funBlock[T](locals: List[Datatype])(expression: => T): (Array[asm.Op], T) = {
     regCount = 0
     localCount = 0
     globalCount = 0
     localVars = locals.map(d => local(d.size, d.align)).toArray
+    val value = expression
+    val newInstrs = instrs.toArray
+    instrs.clear()
+    (newInstrs, value)
+  }
+
+  def block(expression: => Unit): Array[asm.Op] = {
+    val savedInstrs = instrs
+    expression
+    val newInstrs = instrs.toArray
+    instrs = savedInstrs
+    newInstrs
   }
 }
 
@@ -221,6 +239,7 @@ abstract class Op {
     }
   }
 
+  @tailrec
   def generateAsm(context: AbstractAsmContext): Unit = {
     this match {
       case UnitLit() =>
@@ -241,36 +260,43 @@ abstract class Op {
         context.data(Data(this)) = (Some(asm.Loc(local)), tupleType)
       case AddInt(List(a, b), List()) =>
         val result = asm.Reg(context.reg())
-        val left = context.data(a)._1.get
-        val right = context.data(b)._1.get
         context.data(Data(this)) = (Some(result), IntDatatype)
-        context.instrs.append(asm.Add(result, left, right))
+        context.instrs.append(asm.Add(result, context.src(a), context.src(b)))
       case AddInt(List(a), List(b)) =>
         val result = asm.Reg(context.reg())
-        val left = context.data(a)._1.get
-        val right = context.data(b)._1.get
         context.data(Data(this)) = (Some(result), IntDatatype)
-        context.instrs.append(asm.Sub(result, left, right))
+        context.instrs.append(asm.Sub(result, context.src(a), context.src(b)))
       case AddInt(addInts, subInts) => ???
+      case BitwiseInt(BitwiseOp.And, List(a, b)) =>
+        val result = asm.Reg(context.reg())
+        context.data(Data(this)) = (Some(result), IntDatatype)
+        context.instrs.append(asm.And(result, context.src(a), context.src(b)))
+      case BitwiseInt(BitwiseOp.Or, List(a, b)) =>
+        val result = asm.Reg(context.reg())
+        context.data(Data(this)) = (Some(result), IntDatatype)
+        context.instrs.append(asm.Or(result, context.src(a), context.src(b)))
+      case BitwiseInt(BitwiseOp.Xor, List(a, b)) =>
+        val result = asm.Reg(context.reg())
+        context.data(Data(this)) = (Some(result), IntDatatype)
+        context.instrs.append(asm.Xor(result, context.src(a), context.src(b)))
       case BitwiseInt(bitwiseOp, ints) => ???
       case MultInt(List(a, b)) =>
         val result = asm.Reg(context.reg())
-        val left = context.data(a)._1.get
-        val right = context.data(b)._1.get
         context.data(Data(this)) = (Some(result), IntDatatype)
-        context.instrs.append(asm.Mult(result, left, right))
+        context.instrs.append(asm.Mult(result, context.src(a), context.src(b)))
       case MultInt(ints) => ???
       case DivInt(dividend, divisor) =>
         val quotient = asm.Reg(context.reg())
         val remainder = asm.Reg(context.reg())
-        val left = context.data(dividend)._1.get
-        val right = context.data(divisor)._1.get
         context.data(Data(Some(this), 0)) = (Some(quotient), IntDatatype)
         context.data(Data(Some(this), 1)) = (Some(remainder), IntDatatype)
-        context.instrs.append(asm.Div(Some(quotient), Some(remainder), left, right))
+        context.instrs.append(asm.Div(Some(quotient), Some(remainder), context.src(dividend), context.src(divisor)))
       case CompInt(compType, int) => ???
-      case If(condition, ifBlock, elseBlock) => ???
-      case EndIf(_, returnValues) => ???
+      case If(Data(Some(CompInt(compType, Data(Some(AddInt(List(a), List(b))), 0))), 0), ifBlock, elseBlock) =>
+        val ifBlockAsm = context.block(ifBlock.next.generateAsm(context))
+        val elseBlockAsm = context.block(elseBlock.next.generateAsm(context))
+        asm.If(asm.Condition(compType.condType, context.src(a), context.src(b)), ifBlockAsm, elseBlockAsm)
+      case EndIf(_, returnValues) => ()
       case TupleIdx(tuple, idx) =>
         val (Some(src: asm.DstOff), datatype: TupleDatatype) = context.data(tuple)
         val offset = tupleLayout(datatype.elements)._3(idx)
@@ -296,11 +322,11 @@ abstract class Op {
       case WriteGlobal(global, idx, data) => ???
       case RefGlobal(global, idx) => ???
       case Print(data) =>
-        context.instrs.append(asm.Print(context.data(data)._1.get))
+        context.instrs.append(asm.Print(context.src(data)))
       case Call(Left(fun), values) => ???
       case Call(Right(fun), values) => ???
       case Ret(returnValues) =>
-        context.instrs.append(asm.Ret(returnValues.flatMap(data => context.data(data)._1)))
+        context.instrs.append(asm.Ret(returnValues.flatMap(data => context.srcOption(data))))
     }
     this match {
       case opNext: OpNext => opNext.next.generateAsm(context)
@@ -362,24 +388,25 @@ class OptUnit(var mainFun: Fun, var funs: List[Fun], var vars: List[Var]) {
     val context = new AbstractAsmContext(this)
 
     val asmFuns = funs.map { fun =>
-      context.reset(fun.localVars)
+      val (block, (params, returnValues)) = context.funBlock(fun.localVars) {
+        fun.signature.params.zipWithIndex.foreach {
+          case (UnitDatatype, _) => ()
+          case (TupleDatatype(elements), idx) => context.data(Data(None, idx)) = (Some(asm.Mem(context.reg())), TupleDatatype(elements))
+          case (datatype, idx) => context.data(Data(None, idx)) = (Some(asm.Reg(context.reg())), datatype)
+        }
 
-      fun.signature.params.zipWithIndex.foreach {
-        case (UnitDatatype, _) => ()
-        case (TupleDatatype(elements), idx) => context.data(Data(None, idx)) = (Some(asm.Mem(context.reg())), TupleDatatype(elements))
-        case (datatype, idx) => context.data(Data(None, idx)) = (Some(asm.Reg(context.reg())), datatype)
+        val params = context.regCount
+
+        val returnValues = fun.signature.returnTypes.count {
+          case UnitDatatype => false
+          case _ => true
+        }
+
+        fun.next.generateAsm(context)
+
+        (params, returnValues)
       }
-
-      val params = context.regCount
-
-      val returnValues = fun.signature.returnTypes.count {
-        case UnitDatatype => false
-        case _ => true
-      }
-
-      fun.next.generateAsm(context)
-
-      new asm.Fun(context.instrs.toArray, params, returnValues, context.regCount, context.localCount)
+      new asm.Fun(block, params, returnValues, context.regCount, context.localCount)
     }.toArray
 
     new asm.Program(asmFuns, Array.empty)

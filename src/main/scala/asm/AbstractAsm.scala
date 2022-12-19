@@ -1,15 +1,15 @@
 package asm
 
-enum ConditionType(val name: String) {
-  case Gt extends ConditionType(">")
-  case Gte extends ConditionType(">=")
-  case Eq extends ConditionType("==")
-  case Neq extends ConditionType("!=")
+enum CondType(val name: String) {
+  case Gt extends CondType(">")
+  case Gte extends CondType(">=")
+  case Eq extends CondType("==")
+  case Neq extends CondType("!=")
 
   override def toString: String = name
 }
 
-case class Condition(conditionType: ConditionType, left: Src, right: Src) {
+case class Condition(conditionType: CondType, left: Src, right: Src) {
   override def toString: String = s"$left $conditionType $right"
 }
 
