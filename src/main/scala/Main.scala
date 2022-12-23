@@ -131,13 +131,19 @@ def parseArgs(args: List[(FilePosRange, String)], parsedArgs: ParsedArgs): Parse
       opt.globalVarInline(optUnit)
       opt.funExprInline(optUnit)
       opt.inlineFunctions(optUnit)
+      printFile(filePath + ".opt_graph_1.txt", optUnit.format())
+      Process(s"dot -Tsvg $filePath.opt_graph_1.txt -o $filePath.opt_graph_1.svg").!(ProcessLogger(_ => ()))
       opt.localVarInline(optUnit)
       opt.deadCodeElimination(optUnit)
       opt.deadBlockElimination(optUnit)
-      printFile(filePath + ".opt_graph_1.txt", optUnit.format())
-      Process(s"dot -Tsvg $filePath.opt_graph_1.txt -o $filePath.opt_graph_1.svg").!(ProcessLogger(_ => ()))
 
-      println(window("ABSTRACT ASSEMBLY", optUnit.generateAsm().toString))
+      val asmProgram = optUnit.generateAsm()
+
+      println(window("ABSTRACT ASSEMBLY", asmProgram.toString))
+      asm.purgeDeadCode(asmProgram)
+      println(window("ABSTRACT ASSEMBLY OPTIMIZED", asmProgram.toString))
+      asm.assembleX64WindowsWithLinearScan(asmProgram)
+      println("\n\n\n\n")
     }
 
     printFile(filePath + ".asm", AsmGen.toString)

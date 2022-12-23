@@ -693,6 +693,6 @@ def analyzeExpr(ctx: ExprParsingContext)(expr: syn.Expr): Expr = expr match {
     IfExpr(analyzedCondition, analyzedIfBlock, analyzedElseBlock, ctx.module, range)
   case syn.MutExpr(expr, mutable, range, kwRange) =>
     val analyzedExpr = analyzeExpr(ctx)(expr)
-    if (analyzedExpr.returnType !~=> TypeDatatype(false)) throw Error(Error.SEMANTIC, kwRange.file, List(ErrorComponent(kwRange, Some(s"Expected 'Type', found '${analyzedExpr.returnType}'"))), Some("'mut' modifier is only applicable on expressions of type 'Type'"))
+    analyzedExpr.constDatatype
     MutExpr(analyzedExpr, mutable, ctx.module, range)
 }

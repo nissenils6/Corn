@@ -3,7 +3,9 @@ package opt
 import asm.Src
 import core.roundUp
 import sem.ConstUnit.datatype
+import sem.UnitDatatype
 
+import java.time.temporal.TemporalQueries.offset
 import scala.annotation.tailrec
 import scala.collection.mutable
 
@@ -83,6 +85,16 @@ case class Data(op: Option[Op], idx: Int) {
     case (Data(None, idx0), Data(None, idx1)) => idx0 == idx1
     case _ => false
   }
+
+  override def hashCode(): Int = this match {
+    case Data(Some(op), idx) => (op.id * 37 + 2711 + idx * 15331).toInt ^ 1781369
+    case Data(None, idx) => (10247 + idx * 28439) ^ 531023
+  }
+
+  override def toString: String = this match {
+    case Data(Some(op), idx) => s"Data(Some(${op.id}), $idx)"
+    case Data(None, idx) => s"Data(None, $idx)"
+  }
 }
 
 object Data {
@@ -144,6 +156,7 @@ class AbstractAsmContext(optUnit: OptUnit) {
 
   var instrs: mutable.Buffer[asm.Op] = mutable.Buffer.empty
   var localVars: Array[Int] = null
+  var localTypes: Array[Datatype] = null
   var outputDsts: Array[Option[asm.Dst]] = null
 
   var regCount = 0
@@ -179,6 +192,7 @@ class AbstractAsmContext(optUnit: OptUnit) {
     localCount = 0
     globalCount = 0
     localVars = locals.map(d => local(d.size, d.align)).toArray
+    localTypes = locals.toArray
     val value = expression
     val newInstrs = instrs.toArray
     instrs.clear()
@@ -349,8 +363,17 @@ abstract class Op {
       case ReadRef(ref) => ???
       case WriteRef(ref, data) => ???
       case RefValue(data) => ???
-      case ReadLocal(local) => ???
-      case WriteLocal(local, data) => ???
+      case ReadLocal(local) =>
+        context.localTypes(local) match {
+          case UnitDatatype => context.data(Data(this)) = (None, UnitDatatype)
+          case tupleDatatype: TupleDatatype => context.data(Data(this)) = (Some(asm.Loc(context.localVars(local))), tupleDatatype)
+          case subDatatype: Datatype =>
+            val result = asm.Reg(context.reg())
+            context.data(Data(this)) = (Some(result), subDatatype)
+            generateCopyAsm(context, subDatatype, result, asm.Loc(context.localVars(local)))
+        }
+      case WriteLocal(local, data) =>
+        generateCopyAsm(context, context.datatype(data), asm.Loc(context.localVars(local)), context.src(data))
       case RefLocal(local) => ???
       case ReadGlobal(global, idx) => ???
       case WriteGlobal(global, idx, data) => ???

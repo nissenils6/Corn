@@ -1,6 +1,7 @@
 package asm
 
 import scala.collection.mutable
+import scala.compiletime.ops.boolean.&&
 
 enum CondType(val name: String) {
   case Gt extends CondType(">")
@@ -13,6 +14,8 @@ enum CondType(val name: String) {
 
 case class Condition(conditionType: CondType, left: Src, right: Src) {
   override def toString: String = s"$left $conditionType $right"
+
+  def mapReg(registerMap: Map[Int, Int]): Condition = Condition(conditionType, left.mapReg(registerMap), right.mapReg(registerMap))
 }
 
 sealed trait Src {
@@ -27,15 +30,33 @@ sealed trait Src {
     case Loc(offset) => s"loc[0x${offset.toHexString}]"
     case Glo(offset) => s"glo[0x${offset.toHexString}]"
   }
+
+  def mapReg(registerMap: Map[Int, Int]): Src = this match {
+    case Imm(imm) => Imm(imm)
+    case RefFun(fun) => RefFun(fun)
+    case RefMem(reg, offset) => RefMem(registerMap(reg), offset)
+    case RefLoc(offset) => RefLoc(offset)
+    case RefGlo(offset) => RefGlo(offset)
+  }
 }
 
-sealed trait Dst extends Src
+sealed trait Dst extends Src {
+  override def mapReg(registerMap: Map[Int, Int]): Dst = this match {
+    case Reg(reg) => Reg(registerMap(reg))
+  }
+}
 
 sealed trait DstOff extends Dst {
   def offset(off: Int): DstOff = this match {
     case Mem(reg, offset) => Mem(reg, offset + off)
     case Loc(offset) => Loc(offset + off)
     case Glo(offset) => Glo(offset + off)
+  }
+
+  override def mapReg(registerMap: Map[Int, Int]): DstOff = this match {
+    case Mem(reg, offset) => Mem(registerMap(reg), offset)
+    case Loc(offset) => Loc(offset)
+    case Glo(offset) => Glo(offset)
   }
 }
 
@@ -71,7 +92,37 @@ enum DataSize(val size: Int, val name: String) {
   override def toString: String = name
 }
 
+enum IntReg(val qword: String, val dword: String, val word: String, val byte: String, val preserved: Boolean) {
+  case RAX extends IntReg("rax", "eax", "ax", "al", false)
+  case RBX extends IntReg("rbx", "ebx", "bx", "bl", true)
+  case RCX extends IntReg("rcx", "ecx", "cx", "cl", false)
+  case RDX extends IntReg("rdx", "edx", "dx", "dl", false)
+  case RSI extends IntReg("rsi", "esi", "si", "sil", true)
+  case RDI extends IntReg("rdi", "edi", "di", "dil", true)
+  case RBP extends IntReg("rbp", "ebp", "bp", "bpl", true)
+  case RSP extends IntReg("rsp", "esp", "sp", "spl", true)
+  case R8 extends IntReg("r8", "r8d", "r8w", "r8b", false)
+  case R9 extends IntReg("r9", "r9d", "r9w", "r9b", false)
+  case R10 extends IntReg("r10", "r10d", "r10w", "r10b", false)
+  case R11 extends IntReg("r11", "r11d", "r11w", "r11b", false)
+  case R12 extends IntReg("r12", "r12d", "r12w", "r12b", true)
+  case R13 extends IntReg("r13", "r13d", "r13w", "r13b", true)
+  case R14 extends IntReg("r14", "r14d", "r14w", "r14b", true)
+  case R15 extends IntReg("r15", "r15d", "r15w", "r15b", true)
+
+  def apply(dataSize: DataSize): String = dataSize match {
+    case DataSize.Byte => byte
+    case DataSize.Word => word
+    case DataSize.DWord => dword
+    case DataSize.QWord => qword
+  }
+
+  override def toString: String = qword
+}
+
 abstract class Op {
+  private def formatSimple(operator: String): String = s" $operator\n"
+
   private def formatSimple(operator: String, operands: List[Src]): String =
     s" ${operator.padTo(12, ' ')}${operands.mkString(", ")}\n"
 
@@ -79,31 +130,46 @@ abstract class Op {
     s" ${results.map(_.map(_.toString).getOrElse("_")).mkString(", ").padTo(8, ' ')} <- $operator ${operands.mkString(", ")}\n"
 
   def format(): String = this match {
-    case Simple(simpleOpType, result, left, right) => formatSimple( simpleOpType.name, List(Some(result)), List(left, right))
-    case Mult(result, left, right) => formatSimple( "mul", List(Some(result)), List(left, right))
-    case Div(quotient, remainder, left, right) => formatSimple( "div", List(quotient, remainder), List(left, right))
-    case Mov(dataSize, dst, src) => formatSimple( s"mov $dataSize", List(Some(dst)), List(src))
+    case Simple(simpleOpType, result, left, right) => formatSimple(simpleOpType.name, List(Some(result)), List(left, right))
+    case Mult(result, left, right) => formatSimple("mul", List(Some(result)), List(left, right))
+    case Div(quotient, remainder, left, right) => formatSimple("div", List(quotient, remainder), List(left, right))
+    case Mov(dataSize, dst, src) => formatSimple(s"mov $dataSize", List(Some(dst)), List(src))
     case If(condition, _) => s" if $condition\n"
-    case Else(_, _) => s" else\n"
-    case EndIf(_) => s" endif\n"
-    case CSet(condition, dst) => formatSimple( s"set if $condition ", List(Some(dst)), List())
-    case Call(fun, results, args) => formatSimple( s"call($fun)", results.map(Some.apply), args)
-    case Ret(values) => formatSimple( "ret", values)
-    case Print(arg) => formatSimple( "print", List(arg))
+    case Else(_, _) => formatSimple("else")
+    case EndIf(_) => formatSimple("endif")
+    case CSet(condition, dst) => formatSimple(s"set if $condition ", List(Some(dst)), List())
+    case Call(fun, results, args) => formatSimple(s"call($fun)", results, args)
+    case Ret(values) => formatSimple("ret", values)
+    case Print(arg) => formatSimple("print", List(arg))
+    case Nop => formatSimple("nop")
   }
 
   def sources(): List[Src] = this match {
     case Simple(_, _, left, right) => List(left, right)
-    case Mult(result, left, right) => List(left, right)
-    case Div(quotient, remainder, left, right) => List(left, right)
-    case Mov(dataSize, dst, src) => List(src)
+    case Mult(_, left, right) => List(left, right)
+    case Div(_, _, left, right) => List(left, right)
+    case Mov(_, _, src) => List(src)
     case If(condition, _) => List(condition.left, condition.right)
     case Else(_, _) => List()
     case EndIf(_) => List()
-    case CSet(condition, dst) => List(condition.left, condition.right)
-    case Call(fun, results, args) => args
+    case CSet(condition, _) => List(condition.left, condition.right)
+    case Call(fun, _, args) => fun :: args
     case Ret(values) => values
     case Print(arg) => List(arg)
+  }
+
+  def destinations(): List[Src] = this match {
+    case Simple(_, result, _, _) => List(result)
+    case Mult(result, _, _) => List(result)
+    case Div(quotient, remainder, _, _) => List(quotient, remainder).flatten
+    case Mov(_, dst, _) => List(dst)
+    case If(_, _) => List()
+    case Else(_, _) => List()
+    case EndIf(_) => List()
+    case CSet(_, dst) => List(dst)
+    case Call(_, results, _) => results.flatten
+    case Ret(values) => List()
+    case Print(_) => List()
   }
 
   def registerSources(): List[Int] = sources().flatMap {
@@ -122,11 +188,12 @@ case class If(var condition: Condition, var elseInstr: Int) extends Op
 case class Else(var ifInstr: Int, var endInstr: Int) extends Op
 case class EndIf(var elseInstr: Int) extends Op
 case class CSet(var condition: Condition, var dst: Dst) extends Op
-case class Call(var fun: Src, var results: List[Dst], var args: List[Src]) extends Op
+case class Call(var fun: Src, var results: List[Option[Dst]], var args: List[Src]) extends Op
 case class Ret(var values: List[Src]) extends Op
 case class Print(var arg: Src) extends Op
+case object Nop extends Op
 
-class Fun(val block: Array[Op], val params: Int, val returnValues: Int, val registers: Int, val stackSpace: Int) {
+class Fun(var block: Array[Op], var params: Int, var returnValues: Int, var registers: Int, var stackSpace: Int) {
   def format(id: Int): String = s"fun[$id] (parameters = $params, return values = $returnValues, registers = $registers, local stack space = $stackSpace)\n${block.map(_.format()).mkString}"
 }
 
@@ -149,5 +216,177 @@ def purgeDeadCode(program: Program): Unit = program.funs.foreach { fun =>
     reachedRegisters.addAll(op.registerSources())
   }
 
+  val aliveOps = fun.block.map {
+    case Simple(_, Reg(reg), _, _) => reachedRegisters.contains(reg)
+    case Mult(Reg(reg), _, _) => reachedRegisters.contains(reg)
+    case div: Div =>
+      div.quotient = div.quotient.filter {
+        case Reg(reg) => reachedRegisters.contains(reg)
+        case _ => true
+      }
+      div.remainder = div.remainder.filter {
+        case Reg(reg) => reachedRegisters.contains(reg)
+        case _ => true
+      }
+      div.quotient.orElse(div.remainder).nonEmpty
+    case Mov(_, Reg(reg), _) => reachedRegisters.contains(reg)
+    case CSet(_, Reg(reg)) => reachedRegisters.contains(reg)
+    case call: Call =>
+      call.results = call.results.map(_.filter {
+        case Reg(reg) => reachedRegisters.contains(reg)
+        case _ => true
+      })
+      true
+    case _ => true
+  }
 
+  fun.block = fun.block.zip(aliveOps).map {
+    case (Simple(simpleOpType, result, Imm(left), right), true) if simpleOpType != Sub => Simple(simpleOpType, result, right, Imm(left))
+    case (Mult(result, Imm(left), right), true) => Mult(result, right, Imm(left))
+    case (op, true) => op
+    case (_, false) => Nop
+  }
+
+  val registerMap = Range(0, fun.registers).filter(r => reachedRegisters.contains(r) || r <= fun.params).zipWithIndex.toMap
+
+  fun.block.foreach {
+    case simpleOp: Simple =>
+      simpleOp.result = simpleOp.result.mapReg(registerMap)
+      simpleOp.left = simpleOp.left.mapReg(registerMap)
+      simpleOp.right = simpleOp.right.mapReg(registerMap)
+    case multOp: Mult =>
+      multOp.result = multOp.result.mapReg(registerMap)
+      multOp.left = multOp.left.mapReg(registerMap)
+      multOp.right = multOp.right.mapReg(registerMap)
+    case divOp: Div =>
+      divOp.quotient = divOp.quotient.map(_.mapReg(registerMap))
+      divOp.remainder = divOp.remainder.map(_.mapReg(registerMap))
+      divOp.left = divOp.left.mapReg(registerMap)
+      divOp.right = divOp.right.mapReg(registerMap)
+    case movOp: Mov =>
+      movOp.dst = movOp.dst.mapReg(registerMap)
+      movOp.src = movOp.src.mapReg(registerMap)
+    case ifOp: If =>
+      ifOp.condition = ifOp.condition.mapReg(registerMap)
+    case Else(_, _) => ()
+    case EndIf(_) => ()
+    case cSetOp: CSet =>
+      cSetOp.condition = cSetOp.condition.mapReg(registerMap)
+      cSetOp.dst = cSetOp.dst.mapReg(registerMap)
+    case callOp: Call =>
+      callOp.fun = callOp.fun.mapReg(registerMap)
+      callOp.results = callOp.results.map(_.map(_.mapReg(registerMap)))
+      callOp.args = callOp.args.map(_.mapReg(registerMap))
+    case retOp: Ret =>
+      retOp.values = retOp.values.map(_.mapReg(registerMap))
+    case printOp: Print =>
+      printOp.arg = printOp.arg.mapReg(registerMap)
+    case Nop => ()
+  }
+
+  fun.registers = registerMap.size
+}
+
+val X64_REGS_FOR_ALLOC: Array[IntReg] = Array(IntReg.RDX, IntReg.RCX, IntReg.R8, IntReg.R9, IntReg.R10, IntReg.R11, IntReg.RBX, IntReg.RDI, IntReg.RSI, IntReg.RBP, IntReg.R12, IntReg.R13, IntReg.R14, IntReg.R15)
+
+def assembleX64WindowsWithLinearScan(program: Program): String = {
+  program.funs.foreach { fun =>
+    val divInstructions = fun.block.zipWithIndex.filter(_._1.isInstanceOf[Div]).map(_._2).toSet
+
+    val registerWeights = Array.fill(fun.registers)(0)
+
+    val startRanges = Array.fill(fun.registers)(fun.block.length)
+    val endRanges = Array.fill(fun.registers)(0)
+
+    var ifDepth = 0
+
+    def useReg(reg: Int, op: Int): Unit = {
+      startRanges(reg) = startRanges(reg).min(op)
+      endRanges(reg) = endRanges(reg).max(op)
+
+      val weight = 256 >> ifDepth.min(8)
+      registerWeights(reg) += weight
+    }
+
+    fun.block.zipWithIndex.foreach { case (op, idx) =>
+      op.sources().foreach {
+        case RefMem(reg, _) => useReg(reg, idx)
+        case Reg(reg) => useReg(reg, idx)
+        case Mem(reg, _) => useReg(reg, idx)
+        case _ => ()
+      }
+
+      op.destinations().foreach {
+        case Reg(reg) => useReg(reg, idx)
+        case Mem(reg, _) => useReg(reg, idx)
+        case _ => ()
+      }
+
+      op match {
+        case If(_, _) => ifDepth += 1
+        case EndIf(_) => ifDepth -= 1
+        case _ => ()
+      }
+    }
+
+    val ranges = (0 until fun.registers).zip(startRanges.zip(endRanges)).sortBy(_._2._1).toArray
+
+    val regToRange = ranges.toMap
+    val freeRegs = mutable.Set.from(X64_REGS_FOR_ALLOC)
+    var spilledCount = 0
+    val allocedRegs: mutable.Map[Int, Either[Int, IntReg]] = mutable.Map.empty
+    val touchedRegs: mutable.Set[Int] = mutable.Set.empty
+
+    var active: List[Int] = List.empty
+
+    def spill(): Unit = {
+      val (reg: Int, Right(asmReg: IntReg)) = allocedRegs.maxBy {
+        case (reg, Right(_)) =>
+          val (s, e) = regToRange(reg)
+          registerWeights(reg) / (2 + e - s)
+        case _ => -1
+      }
+      freeRegs.add(asmReg)
+      allocedRegs(reg) = Left(spilledCount)
+      spilledCount += 1
+    }
+
+    def alloc(reg: Int, useRdx: Boolean): Unit = if (freeRegs.isEmpty) {
+      spill()
+      alloc(reg, useRdx)
+    } else {
+      X64_REGS_FOR_ALLOC.find { newReg =>
+        freeRegs.contains(newReg) && (newReg != IntReg.RDX || useRdx)
+      } match {
+        case Some(allocedReg) =>
+          allocedRegs(reg) = Right(allocedReg)
+          touchedRegs.add(reg)
+          freeRegs.remove(allocedReg)
+          active = reg :: active
+        case None =>
+          spill()
+          alloc(reg, useRdx)
+      }
+    }
+
+    ranges.foreach { case (reg, (start, end)) =>
+      val (toDealloc, newActive) = active.partition { reg =>
+        val activeEnd = endRanges(reg)
+        activeEnd <= start
+      }
+      active = newActive
+      toDealloc.foreach { reg =>
+        allocedRegs(reg).foreach(freeRegs.add)
+      }
+
+      val useRdx = !divInstructions.exists((start until end).contains)
+      alloc(reg, useRdx)
+    }
+
+
+
+    println(allocedRegs.mkString("\n"))
+  }
+
+  ""
 }

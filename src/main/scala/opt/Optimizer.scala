@@ -225,12 +225,12 @@ def funExprInline(optUnit: OptUnit): Boolean = {
 
 def localVarInline(optUnit: OptUnit): Boolean = {
   def findSingleAssignLocals(hasNext: HasNext, locals: mutable.Map[Int, Data], multipleAssign: mutable.Set[Int]): Unit = visitOps(hasNext) {
-    case WriteLocal(local, data) if !multipleAssign.contains(local) =>
-      locals(local) = data
     case WriteLocal(local, _) if locals.contains(local) =>
       locals.remove(local)
       multipleAssign.add(local)
-    case RefLocal(local) if locals.contains(local) =>
+    case WriteLocal(local, data) if !multipleAssign.contains(local) =>
+      locals(local) = data
+    case RefLocal(local)  =>
       locals.remove(local)
       multipleAssign.add(local)
     case _ => ()
@@ -259,7 +259,7 @@ def localVarInline(optUnit: OptUnit): Boolean = {
   optUnit.funs.foreach { fun =>
     val locals = mutable.Map[Int, Data]()
     val dataflowMap = mutable.Map[Data, Data]()
-    findSingleAssignLocals(fun, locals, mutable.Set())
+    findSingleAssignLocals(fun, locals, mutable.Set.empty)
     val newLocals = fun.localVars.indices.foldLeft(immutable.TreeMap[Int, Int]()) {
       case (map, idx) if locals.contains(idx) => map
       case (map, idx) => map + ((idx, map.size))
@@ -274,7 +274,7 @@ def localVarInline(optUnit: OptUnit): Boolean = {
   optUnit.vars.foreach { globalVar =>
     val locals = mutable.Map[Int, Data]()
     val dataflowMap = mutable.Map[Data, Data]()
-    findSingleAssignLocals(globalVar, locals, mutable.Set())
+    findSingleAssignLocals(globalVar, locals, mutable.Set.empty)
     val newLocals = globalVar.localVars.indices.foldLeft(immutable.TreeMap[Int, Int]()) {
       case (map, idx) if locals.contains(idx) => map
       case (map, idx) => map + ((idx, map.size))
