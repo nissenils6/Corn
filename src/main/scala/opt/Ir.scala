@@ -2,6 +2,7 @@ package opt
 
 import asm.Src
 import core.roundUp
+import sem.ConstUnit.datatype
 
 import scala.annotation.tailrec
 import scala.collection.mutable
@@ -143,6 +144,7 @@ class AbstractAsmContext(optUnit: OptUnit) {
 
   var instrs: mutable.Buffer[asm.Op] = mutable.Buffer.empty
   var localVars: Array[Int] = null
+  var outputDsts: Array[Option[asm.Dst]] = null
 
   var regCount = 0
   var localCount = 0
@@ -172,7 +174,7 @@ class AbstractAsmContext(optUnit: OptUnit) {
     l
   }
 
-  def funBlock[T](locals: List[Datatype])(expression: => T): (Array[asm.Op], T) = {
+  def fun[T](locals: List[Datatype])(expression: => T): (Array[asm.Op], T) = {
     regCount = 0
     localCount = 0
     globalCount = 0
@@ -183,12 +185,11 @@ class AbstractAsmContext(optUnit: OptUnit) {
     (newInstrs, value)
   }
 
-  def block(expression: => Unit): Array[asm.Op] = {
-    val savedInstrs = instrs
+  def block(newDsts: Array[Option[asm.Dst]])(expression: => Unit): Unit = {
+    val savedDsts = outputDsts
+    outputDsts = newDsts
     expression
-    val newInstrs = instrs.toArray
-    instrs = savedInstrs
-    newInstrs
+    outputDsts = savedDsts
   }
 }
 
@@ -220,7 +221,7 @@ abstract class Op {
       case MultInt(ints) => node("*") :: (recur ::: ints.map(dataEdge))
       case DivInt(dividend, divisor) => node("/") :: dataEdgeLabel("Dividend")(dividend) :: dataEdgeLabel("Divisor")(divisor) :: recur
       case CompInt(compType, int) => node(compType.string) :: dataEdge(int) :: recur
-      case If(condition, ifBlock, elseBlock) => node("if") :: dataEdge(condition) :: ctrlEdgeIf(ifBlock.next) :: ctrlEdgeElse(elseBlock.next) :: (ifBlock.next.format(funIndex, funIds, varIds) ::: elseBlock.next.format(funIndex, funIds, varIds) ::: recur)
+      case If(condition, ifBlock, elseBlock, _) => node("if") :: dataEdge(condition) :: ctrlEdgeIf(ifBlock.next) :: ctrlEdgeElse(elseBlock.next) :: (ifBlock.next.format(funIndex, funIds, varIds) ::: elseBlock.next.format(funIndex, funIds, varIds) ::: recur)
       case EndIf(_, returnValues) => node("end if") :: returnValues.map(dataEdge)
       case TupleIdx(tuple, idx) => node(s"tuple[$idx]") :: dataEdge(tuple) :: recur
       case ReadRef(ref) => node(s"val") :: dataEdge(ref) :: recur
@@ -239,8 +240,7 @@ abstract class Op {
     }
   }
 
-  @tailrec
-  def generateAsm(context: AbstractAsmContext): Unit = {
+  final def generateAsm(context: AbstractAsmContext): Unit = {
     this match {
       case UnitLit() =>
         context.data(Data(this)) = (None, UnitDatatype)
@@ -291,12 +291,46 @@ abstract class Op {
         context.data(Data(Some(this), 0)) = (Some(quotient), IntDatatype)
         context.data(Data(Some(this), 1)) = (Some(remainder), IntDatatype)
         context.instrs.append(asm.Div(Some(quotient), Some(remainder), context.src(dividend), context.src(divisor)))
-      case CompInt(compType, int) => ???
-      case If(Data(Some(CompInt(compType, Data(Some(AddInt(List(a), List(b))), 0))), 0), ifBlock, elseBlock) =>
-        val ifBlockAsm = context.block(ifBlock.next.generateAsm(context))
-        val elseBlockAsm = context.block(elseBlock.next.generateAsm(context))
-        asm.If(asm.Condition(compType.condType, context.src(a), context.src(b)), ifBlockAsm, elseBlockAsm)
-      case EndIf(_, returnValues) => ()
+      case CompInt(compType, Data(Some(AddInt(List(a), List(b))), 0)) =>
+        val result = asm.Reg(context.reg())
+        context.data(Data(Some(this), 0)) = (Some(result), BoolDatatype)
+        context.instrs.append(asm.CSet(asm.Condition(compType.condType, context.src(a), context.src(b)), result))
+      case CompInt(compType, int) =>
+        val result = asm.Reg(context.reg())
+        context.data(Data(Some(this), 0)) = (Some(result), BoolDatatype)
+        context.instrs.append(asm.CSet(asm.Condition(compType.condType, context.src(int), asm.Imm(0)), result))
+      case If(data, ifBlock, elseBlock, datatypes) =>
+        val dsts = datatypes.map {
+          case UnitDatatype => None: Option[asm.Dst]
+          case tupleDatatype: TupleDatatype => Some(asm.Loc(context.local(tupleDatatype.size, tupleDatatype.align)))
+          case _ => Some(asm.Reg(context.reg()))
+        }.toArray
+
+        val ifId = context.instrs.length
+        val ifInstr = data match {
+          case Data(Some(CompInt(compType, Data(Some(AddInt(List(a), List(b))), 0))), 0) => asm.If(asm.Condition(compType.condType, context.src(a), context.src(b)), 0)
+          case _ => asm.If(asm.Condition(asm.CondType.Neq, context.src(data), asm.Imm(0)), 0)
+        }
+        context.instrs.append(ifInstr)
+        context.block(dsts)(ifBlock.next.generateAsm(context))
+        val elseId = context.instrs.length
+        val elseInstr = asm.Else(ifId, 0)
+        context.instrs.append(elseInstr)
+        context.block(dsts)(elseBlock.next.generateAsm(context))
+        val endId = context.instrs.length
+        context.instrs.append(asm.EndIf(elseId))
+
+        ifInstr.elseInstr = elseId
+        elseInstr.endInstr = endId
+
+        dsts.zip(datatypes).zipWithIndex.foreach { case ((src, datatype), idx) =>
+          context.data(Data(Some(this), idx)) = (src, datatype)
+        }
+      case EndIf(_, returnValues) =>
+        context.outputDsts.zip(returnValues).foreach {
+          case (Some(dst), data) => generateCopyAsm(context, context.datatype(data), dst, context.src(data))
+          case (None, _) => ()
+        }
       case TupleIdx(tuple, idx) =>
         val (Some(src: asm.DstOff), datatype: TupleDatatype) = context.data(tuple)
         val offset = tupleLayout(datatype.elements)._3(idx)
@@ -347,7 +381,7 @@ case class BitwiseInt(var bitwiseOp: BitwiseOp, var ints: List[Data]) extends Op
 case class MultInt(var ints: List[Data]) extends OpNext
 case class DivInt(var dividend: Data, var divisor: Data) extends OpNext
 case class CompInt(var compType: CompType, var int: Data) extends OpNext
-case class If(var condition: Data, var ifBlock: Block, var elseBlock: Block) extends OpNext
+case class If(var condition: Data, var ifBlock: Block, var elseBlock: Block, var datatypes: List[Datatype]) extends OpNext
 case class EndIf(var ifNode: If, var returnValues: List[Data]) extends Op
 case class TupleIdx(var tuple: Data, var idx: Int) extends OpNext
 case class ReadRef(var ref: Data) extends OpNext
@@ -388,7 +422,7 @@ class OptUnit(var mainFun: Fun, var funs: List[Fun], var vars: List[Var]) {
     val context = new AbstractAsmContext(this)
 
     val asmFuns = funs.map { fun =>
-      val (block, (params, returnValues)) = context.funBlock(fun.localVars) {
+      val (block, (params, returnValues)) = context.fun(fun.localVars) {
         fun.signature.params.zipWithIndex.foreach {
           case (UnitDatatype, _) => ()
           case (TupleDatatype(elements), idx) => context.data(Data(None, idx)) = (Some(asm.Mem(context.reg())), TupleDatatype(elements))

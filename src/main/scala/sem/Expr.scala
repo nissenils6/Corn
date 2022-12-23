@@ -429,7 +429,7 @@ abstract class Expr() {
       val (firstElseOp, lastElseOp) = elseBlock.generateIr(context, localVars)
       val elseBlockNode = opt.Block(firstElseOp)
 
-      val ifOp = opt.If(opt.Data(lastConditionOp), ifBlockNode, elseBlockNode)
+      val ifOp = opt.If(opt.Data(lastConditionOp), ifBlockNode, elseBlockNode, List(ifBlock.returnType.optDatatype))
       val endIfNode = opt.EndIf(ifOp, List(opt.Data(lastIfOp)))
       val endElseNode = opt.EndIf(ifOp, List(opt.Data(lastElseOp)))
 

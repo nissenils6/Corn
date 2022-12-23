@@ -22,7 +22,7 @@ def visitOps(prev: HasNext)(f: Op => Unit): Unit = {
   while (true) {
     f(cur.next)
     cur.next match {
-      case ifNode@If(_, ifBlock, elseBlock) =>
+      case ifNode@If(_, ifBlock, elseBlock, _) =>
         visitOps(ifBlock)(f)
         visitOps(elseBlock)(f)
         cur = ifNode
@@ -38,7 +38,7 @@ def visitOpsAndPrev(prev: HasNext)(f: (HasNext, Op) => Boolean): Unit = {
   while (true) {
     val revisit = f(cur, cur.next)
     cur.next match {
-      case ifNode@If(_, ifBlock, elseBlock) =>
+      case ifNode@If(_, ifBlock, elseBlock, _) =>
         visitOpsAndPrev(ifBlock)(f)
         visitOpsAndPrev(elseBlock)(f)
         if (!revisit) cur = ifNode
@@ -53,7 +53,7 @@ def visitOpsAndPrevAcc[T](prev: HasNext, acc: T)(f: (HasNext, Op, T) => T): T = 
   var curAcc = acc
 
   while (true) cur.next match {
-    case ifNode@If(_, ifBlock, elseBlock) =>
+    case ifNode@If(_, ifBlock, elseBlock, _) =>
       curAcc = f(cur, ifNode, curAcc)
       curAcc = visitOpsAndPrevAcc(ifBlock, curAcc)(f)
       curAcc = visitOpsAndPrevAcc(elseBlock, curAcc)(f)
@@ -72,7 +72,7 @@ def visitOpsAndPrevUntil[T](prev: HasNext)(f: (HasNext, Op) => Option[T]): Optio
   var cur = prev
 
   while (true) cur.next match {
-    case ifNode@If(_, ifBlock, elseBlock) =>
+    case ifNode@If(_, ifBlock, elseBlock, _) =>
       f(cur, ifNode).orElse(
         visitOpsAndPrevUntil(ifBlock)(f)
       ).orElse(
@@ -183,7 +183,7 @@ def mapDataflow(dataflowMap: collection.Map[Data, Data])(data: Data): Data = if 
 def isPure(op: Op): Boolean = op match {
   case UnitLit() | IntLit(_) | BoolLit(_) | FunLit(_) | TupleLit(_) | AddInt(_, _) | BitwiseInt(_, _) | MultInt(_) | DivInt(_, _)
        | CompInt(_, _) | TupleIdx(_, _) | ReadRef(_) | RefValue(_) | ReadLocal(_) | RefLocal(_) | ReadGlobal(_, _) | RefGlobal(_, _) => true
-  case If(_, _, _) | EndIf(_, _) | WriteRef(_, _) | WriteLocal(_, _) | WriteGlobal(_, _, _) | Print(_) | Call(_, _) | Ret(_) => false
+  case If(_, _, _, _) | EndIf(_, _) | WriteRef(_, _) | WriteLocal(_, _) | WriteGlobal(_, _, _) | Print(_) | Call(_, _) | Ret(_) => false
 }
 
 def globalVarInline(optUnit: OptUnit): Boolean = {
@@ -328,7 +328,7 @@ def inlineFunctions(optUnit: OptUnit): Boolean = {
       case oldOp@MultInt(ints) => newNode(oldOp, MultInt(ints.map(mapData)))
       case oldOp@DivInt(dividend, divisor) => newNode(oldOp, DivInt(mapData(dividend), mapData(divisor)))
       case oldOp@CompInt(compType, int) => newNode(oldOp, CompInt(compType, mapData(int)))
-      case oldOp@If(condition, ifBlock, elseBlock) => newNode(oldOp, If(mapData(condition), Block(recur(ifBlock)), Block(recur(elseBlock))))
+      case oldOp@If(condition, ifBlock, elseBlock, datatypes) => newNode(oldOp, If(mapData(condition), Block(recur(ifBlock)), Block(recur(elseBlock)), datatypes))
       case oldOp@TupleIdx(tuple, idx) => newNode(oldOp, TupleIdx(mapData(tuple), idx))
       case oldOp@ReadRef(ref) => newNode(oldOp, ReadRef(mapData(ref)))
       case oldOp@WriteRef(ref, data) => newNode(oldOp, WriteRef(mapData(ref), mapData(data)))
