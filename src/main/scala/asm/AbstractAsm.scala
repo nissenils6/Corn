@@ -4,6 +4,7 @@ import core.{roundDown, roundUp}
 
 import java.time.temporal.TemporalQueries.offset
 import scala.collection.mutable
+import scala.compiletime.ops.string
 
 enum CondType(val name: String) {
   case Gt extends CondType(">")
@@ -39,30 +40,6 @@ sealed trait Src {
     case RefMem(reg, offset) => RefMem(registerMap(reg), offset)
     case RefLoc(offset) => RefLoc(offset)
     case RefGlo(offset) => RefGlo(offset)
-  }
-
-  def operandType(allocation: Map[Int, IntReg]): OperandType = this match {
-    case Imm(imm) => OperandType.Immediate
-    case RefFun(fun) => OperandType.Computed
-    case RefMem(reg, offset) => OperandType.Computed
-    case RefLoc(offset) => OperandType.Computed
-    case RefGlo(offset) => OperandType.Computed
-    case Reg(reg) => OperandType.Register
-    case Mem(reg, offset) => OperandType.Memory
-    case Loc(offset) => OperandType.Memory
-    case Glo(offset) => OperandType.Memory
-  }
-
-  def asm(allocation: Map[Int, IntReg]): String = this match {
-    case Imm(imm) => s"$imm"
-    case RefFun(fun) => s"[F$fun]"
-    case RefMem(reg, offset) => s"[F${allocation(reg)} + $offset]"
-    case RefLoc(offset) => s"[rsp + $offset]"
-    case RefGlo(offset) => s"[global_data + $offset]"
-    case Reg(reg) => s"${allocation(reg)}"
-    case Mem(reg, offset) => s"[F${allocation(reg)} + $offset]"
-    case Loc(offset) => s"[rsp + $offset]"
-    case Glo(offset) => s"[global_data + $offset]"
   }
 }
 
@@ -409,7 +386,7 @@ def assembleX64WindowsWithLinearScan(program: Program): String = {
       alloc(reg, useRdx)
     }
 
-    def spillAsm(spillSlot: Int) = s"qword[rsp + ${fun.stackSpace.roundUp(8) + spillSlot * 8}]"
+    def spillAsm(spillSlot: Int) = s"[rsp + ${fun.stackSpace.roundUp(8) + spillSlot * 8}]"
 
     def asm(operator: String, operands: String*) = s"        ${operator.padTo(8, ' ')}${operands.mkString(", ")}\n"
 
@@ -430,14 +407,6 @@ def assembleX64WindowsWithLinearScan(program: Program): String = {
       }
     }
 
-    object OperandImmOrReg {
-      def unapply(src: Src): Option[String] = src match {
-        case OperandImm(string) => Some(string)
-        case OperandReg(string) => Some(string)
-        case _ => None
-      }
-    }
-
     object OperandMem {
       def unapply(src: Src): Option[String] = src match {
         case Reg(reg) => allocedRegs(reg) match {
@@ -454,10 +423,27 @@ def assembleX64WindowsWithLinearScan(program: Program): String = {
       }
     }
 
+    object OperandImmOrReg {
+      def unapply(src: Src): Option[String] = src match {
+        case OperandImm(string) => Some(string)
+        case OperandReg(string) => Some(string)
+        case _ => None
+      }
+    }
+
     object OperandMemOrReg {
       def unapply(src: Src): Option[String] = src match {
         case OperandMem(string) => Some(string)
         case OperandReg(string) => Some(string)
+        case _ => None
+      }
+    }
+
+    object OperandAny {
+      def unapply(src: Src): Option[String] = src match {
+        case OperandMem(string) => Some(string)
+        case OperandReg(string) => Some(string)
+        case OperandImm(string) => Some(string)
         case _ => None
       }
     }
@@ -475,37 +461,65 @@ def assembleX64WindowsWithLinearScan(program: Program): String = {
       }
     }
 
-    object OperandComputed {
+    object OperandRegComputed {
       def unapply(src: Src): Option[String => (String, String)] = src match {
-        case RefFun(fun) => ???
-        case RefMem(reg, offset) => ???
-        case RefLoc(offset) => ???
-        case RefGlo(offset) => ???
+        case RefFun(fun) => Some(tempReg => (
+          asm("lea", tempReg, s"[F$fun]"),
+          tempReg
+        ))
+        case RefMem(reg, offset) => allocedRegs(reg) match {
+          case Left(spillSlot) => Some(tempReg => (
+            asm("mov", tempReg, spillAsm(spillSlot)) + asm("lea", tempReg, s"[$tempReg + $offset]"),
+            tempReg
+          ))
+          case Right(asmReg) => Some(tempReg => (
+            asm("lea", tempReg, s"[${asmReg.qword} + $offset]"),
+            tempReg
+          ))
+        }
+        case RefLoc(offset) => Some(tempReg => (
+          asm("lea", tempReg, s"[rsp + $offset]"),
+          tempReg
+        ))
+        case RefGlo(offset) => Some(tempReg => (
+          asm("lea", tempReg, s"[global_data + $offset]"),
+          tempReg
+        ))
         case _ => None
       }
     }
 
+    object OperandAnyComputed {
+      def unapply(src: Src): Option[String => (String, String)] = src match {
+        case OperandMemComputed(stringFunction) => Some(stringFunction)
+        case OperandRegComputed(stringFunction) => Some(stringFunction)
+        case _ => None
+      }
+    }
+
+    def binaryOp2(name: String, dst: Dst, src: Src) = (dst, src) match {
+      case (OperandReg(left), OperandAny(right)) => asm(name, left, right)
+      case (OperandReg(left), OperandAnyComputed(computed)) =>
+        val (stmt, right) = computed(IntReg.RAX.qword)
+        stmt + asm(name, left, right)
+      case (OperandMem(left), OperandImmOrReg(right)) => asm(name, left, right)
+      case (OperandMem(left), OperandMem(right)) => asm("mov", IntReg.RAX.qword, right) + asm(name, left, IntReg.RAX.qword)
+      case (OperandMem(left), OperandRegComputed(computed)) =>
+        val (stmt, right) = computed(IntReg.RAX.qword)
+        stmt + asm(name, left, right)
+      case (OperandMem(left), OperandMemComputed(computed)) =>
+        val (stmt, right) = computed(IntReg.RAX.qword)
+        stmt + asm("mov", IntReg.RAX.qword, right) + asm(name, left, IntReg.RAX.qword)
+      case _ => assert(false, s"HANDLING OF $dst AND $src IS NOT IMPLEMENTED YET")
+    }
+
+    def binaryOp3(name: String, dst: Dst, left: Src, right: Src) = ???
+
     val asmText = fun.block.map {
-      case Simple(simpleOpType, Reg(dst), Reg(left), right) if dst == left => (allocedRegs(dst), right) match {
-        case (Left(spillSlot), Imm(imm)) => asm(simpleOpType.name, spillAsm(spillSlot), s"$imm")
-        case (Right(asmReg), Imm(imm)) => asm(simpleOpType.name, asmReg.qword, s"$imm")
-        case (Left(spillSlot), src) => assert(false, s"HANDLING OF $src FOR SIMPLE OPERATIONS WITH SPILLED DESTINATION REGISTER IS NOT IMPLEMENTED YET")
-        case (Right(asmReg), src) => assert(false, s"HANDLING OF $src FOR SIMPLE OPERATIONS WITH NON-SPILLED DESTINATION REGISTER IS NOT IMPLEMENTED YET")
-      }
-      case Mov(dataSize, Reg(reg), right) => (allocedRegs(reg), right) match {
-        case (Left(spillSlot), Imm(imm)) => asm(s"mov $dataSize", spillAsm(spillSlot), s"$imm")
-        case (Right(asmReg), Imm(imm)) => asm(s"mov $dataSize", asmReg.qword, s"$imm")
-        case (Left(spillSlot), Loc(offset)) =>
-          asm(s"mov $dataSize", IntReg.RAX(dataSize), s"[rsp + $offset]") +
-            asm(s"mov $dataSize", spillAsm(spillSlot), IntReg.RAX(dataSize))
-        case (Right(asmReg), Loc(offset)) => asm(s"mov $dataSize", asmReg.qword, s"[rsp + $offset]")
-        case (Left(spillSlot), src) => assert(false, s"HANDLING OF $src FOR MOV WITH SPILLED DESTINATION REGISTER IS NOT IMPLEMENTED YET")
-        case (Right(asmReg), src) => assert(false, s"HANDLING OF $src FOR MOV WITH NON-SPILLED DESTINATION REGISTER IS NOT IMPLEMENTED YET")
-      }
-      case Mov(dataSize, Loc(offset), Imm(imm)) => asm(s"mov $dataSize", s"[rsp + $offset]", s"$imm")
-      case Mov(dataSize, Loc(dstOffset), Loc(srcOffset)) =>
-        asm(s"mov $dataSize", IntReg.RAX(dataSize), s"[rsp + $srcOffset]") +
-          asm(s"mov $dataSize", s"[rsp + $dstOffset]", IntReg.RAX(dataSize))
+      case Simple(simpleOpType, result, left, right) if result == left => binaryOp2(simpleOpType.name, result, right)
+      case Simple(simpleOpType, result, left, right) => binaryOp3(simpleOpType.name, result, left, right)
+      case Mult(result, left, right) if result == left => binaryOp2("imul", result, right)
+      case Mult(result, left, right) => binaryOp3("imul", result, left, right)
       case op => assert(false, s"HANDLING OF $op IS NOT IMPLEMENTED YET")
     }.mkString
 
