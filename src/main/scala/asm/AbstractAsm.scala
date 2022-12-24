@@ -146,17 +146,6 @@ enum IntReg(val qword: String, val dword: String, val word: String, val byte: St
   override def toString: String = qword
 }
 
-trait OperandType {
-
-}
-
-object OperandType {
-  case object Memory extends OperandType
-  case object Register extends OperandType
-  case object Immediate extends OperandType
-  case object Computed extends OperandType
-}
-
 abstract class Op {
   private def formatSimple(operator: String): String = s" $operator\n"
 
@@ -424,16 +413,77 @@ def assembleX64WindowsWithLinearScan(program: Program): String = {
 
     def asm(operator: String, operands: String*) = s"        ${operator.padTo(8, ' ')}${operands.mkString(", ")}\n"
 
-    //    def operation(operator: String, dstOperand: String, srcOperand: String, dstType: OperandType, srcType: OperandType) = (dstType, srcType) match {
-    //      case (OperandType.Register, OperandType.Immediate) => asm(operator, dstOperand, srcOperand)
-    //      case (OperandType.Register, OperandType.Computed) => asm("lea", "rax", srcOperand) + asm(operator, dstOperand, "rax")
-    //      case (OperandType.Register, OperandType.Register) => asm(operator, dstOperand, srcOperand)
-    //      case (OperandType.Register, OperandType.Memory) => asm(operator, dstOperand, srcOperand)
-    //      case (OperandType.Memory, OperandType.Immediate) => asm(operator, dstOperand, srcOperand)
-    //      case (OperandType.Memory, OperandType.Computed) => asm("lea", "rax", srcOperand) + asm(operator, dstOperand, "rax")
-    //      case (OperandType.Memory, OperandType.Register) => asm(operator, dstOperand, srcOperand)
-    //      case (OperandType.Memory, OperandType.Memory) => asm("mov", )
-    //    }
+    object OperandImm {
+      def unapply(src: Src): Option[String] = src match {
+        case Imm(imm) => Some(s"$imm")
+        case _ => None
+      }
+    }
+
+    object OperandReg {
+      def unapply(src: Src): Option[String] = src match {
+        case Reg(reg) => allocedRegs(reg) match {
+          case Left(_) => None
+          case Right(asmReg) => Some(s"${asmReg.qword}")
+        }
+        case _ => None
+      }
+    }
+
+    object OperandImmOrReg {
+      def unapply(src: Src): Option[String] = src match {
+        case OperandImm(string) => Some(string)
+        case OperandReg(string) => Some(string)
+        case _ => None
+      }
+    }
+
+    object OperandMem {
+      def unapply(src: Src): Option[String] = src match {
+        case Reg(reg) => allocedRegs(reg) match {
+          case Left(spillSlot) => Some(spillAsm(spillSlot))
+          case Right(_) => None
+        }
+        case Mem(reg, offset) => allocedRegs(reg) match {
+          case Left(_) => None
+          case Right(asmReg) => Some(s"[${asmReg.qword} + $offset]")
+        }
+        case Loc(offset) => Some(s"[rsp + $offset]")
+        case Glo(offset) => Some(s"[global_data + $offset]")
+        case _ => None
+      }
+    }
+
+    object OperandMemOrReg {
+      def unapply(src: Src): Option[String] = src match {
+        case OperandMem(string) => Some(string)
+        case OperandReg(string) => Some(string)
+        case _ => None
+      }
+    }
+
+    object OperandMemComputed {
+      def unapply(src: Src): Option[String => (String, String)] = src match {
+        case Mem(reg, offset) => allocedRegs(reg) match {
+          case Left(spillSlot) => Some(tempReg => (
+            asm("mov", tempReg, spillAsm(spillSlot)),
+            s"[$tempReg + $offset]"
+          ))
+          case Right(_) => None
+        }
+        case _ => None
+      }
+    }
+
+    object OperandComputed {
+      def unapply(src: Src): Option[String => (String, String)] = src match {
+        case RefFun(fun) => ???
+        case RefMem(reg, offset) => ???
+        case RefLoc(offset) => ???
+        case RefGlo(offset) => ???
+        case _ => None
+      }
+    }
 
     val asmText = fun.block.map {
       case Simple(simpleOpType, Reg(dst), Reg(left), right) if dst == left => (allocedRegs(dst), right) match {
