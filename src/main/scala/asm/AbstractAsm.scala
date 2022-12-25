@@ -77,6 +77,15 @@ case class Glo(offset: Int) extends DstOff
 
 abstract class SimpleOpType(val name: String) {
   def apply(result: Dst, left: Src, right: Src): Simple = Simple(this, result, left, right)
+
+  def compute(a: Long, b: Long): Long = this match {
+    case Add => a + b
+    case Sub => a - b
+    case And => a & b
+    case Or => a | b
+    case Xor => a ^ b
+  }
+
   override def toString: String = name
 }
 
@@ -86,32 +95,32 @@ case object And extends SimpleOpType("and")
 case object Or extends SimpleOpType("or")
 case object Xor extends SimpleOpType("xor")
 
-enum DataSize(val size: Int, val name: String) {
-  case Byte extends DataSize(1, "byte")
-  case Word extends DataSize(2, "word")
-  case DWord extends DataSize(4, "dword")
-  case QWord extends DataSize(8, "qword")
+enum DataSize(val size: Int, val name: String, val zx: String, val sx: String) {
+  case Byte extends DataSize(1, "byte", "movzx", "movsx")
+  case Word extends DataSize(2, "word", "movzx", "movsx")
+  case DWord extends DataSize(4, "dword", "mov", "movsx")
+  case QWord extends DataSize(8, "qword", "mov", "mov")
 
   override def toString: String = name
 }
 
-enum IntReg(val qword: String, val dword: String, val word: String, val byte: String, val preserved: Boolean) {
-  case RAX extends IntReg("rax", "eax", "ax", "al", false)
-  case RBX extends IntReg("rbx", "ebx", "bx", "bl", true)
-  case RCX extends IntReg("rcx", "ecx", "cx", "cl", false)
-  case RDX extends IntReg("rdx", "edx", "dx", "dl", false)
-  case RSI extends IntReg("rsi", "esi", "si", "sil", true)
-  case RDI extends IntReg("rdi", "edi", "di", "dil", true)
-  case RBP extends IntReg("rbp", "ebp", "bp", "bpl", true)
-  case RSP extends IntReg("rsp", "esp", "sp", "spl", true)
-  case R8 extends IntReg("r8", "r8d", "r8w", "r8b", false)
-  case R9 extends IntReg("r9", "r9d", "r9w", "r9b", false)
-  case R10 extends IntReg("r10", "r10d", "r10w", "r10b", false)
-  case R11 extends IntReg("r11", "r11d", "r11w", "r11b", false)
-  case R12 extends IntReg("r12", "r12d", "r12w", "r12b", true)
-  case R13 extends IntReg("r13", "r13d", "r13w", "r13b", true)
-  case R14 extends IntReg("r14", "r14d", "r14w", "r14b", true)
-  case R15 extends IntReg("r15", "r15d", "r15w", "r15b", true)
+enum AsmReg(val qword: String, val dword: String, val word: String, val byte: String, val preserved: Boolean) {
+  case RAX extends AsmReg("rax", "eax", "ax", "al", false)
+  case RBX extends AsmReg("rbx", "ebx", "bx", "bl", true)
+  case RCX extends AsmReg("rcx", "ecx", "cx", "cl", false)
+  case RDX extends AsmReg("rdx", "edx", "dx", "dl", false)
+  case RSI extends AsmReg("rsi", "esi", "si", "sil", true)
+  case RDI extends AsmReg("rdi", "edi", "di", "dil", true)
+  case RBP extends AsmReg("rbp", "ebp", "bp", "bpl", true)
+  case RSP extends AsmReg("rsp", "esp", "sp", "spl", true)
+  case R8 extends AsmReg("r8", "r8d", "r8w", "r8b", false)
+  case R9 extends AsmReg("r9", "r9d", "r9w", "r9b", false)
+  case R10 extends AsmReg("r10", "r10d", "r10w", "r10b", false)
+  case R11 extends AsmReg("r11", "r11d", "r11w", "r11b", false)
+  case R12 extends AsmReg("r12", "r12d", "r12w", "r12b", true)
+  case R13 extends AsmReg("r13", "r13d", "r13w", "r13b", true)
+  case R14 extends AsmReg("r14", "r14d", "r14w", "r14b", true)
+  case R15 extends AsmReg("r15", "r15d", "r15w", "r15b", true)
 
   def apply(dataSize: DataSize): String = dataSize match {
     case DataSize.Byte => byte
@@ -290,7 +299,7 @@ def purgeDeadCode(program: Program): Unit = program.funs.foreach { fun =>
   fun.registers = registerMap.size
 }
 
-val X64_REGS_FOR_ALLOC: Array[IntReg] = Array(IntReg.RCX, IntReg.R8, IntReg.R9, IntReg.R10, IntReg.R11, IntReg.RBX, IntReg.RDI, IntReg.RSI, IntReg.RBP, IntReg.R12, IntReg.R13, IntReg.R14, IntReg.R15)
+val X64_REGS_FOR_ALLOC: Array[AsmReg] = Array(AsmReg.RCX, AsmReg.R8, AsmReg.R9, AsmReg.R10, AsmReg.R11, AsmReg.RBX, AsmReg.RDI, AsmReg.RSI, AsmReg.RBP, AsmReg.R12, AsmReg.R13, AsmReg.R14, AsmReg.R15)
 
 def assembleX64WindowsWithLinearScan(program: Program): String = {
   program.funs.foreach { fun =>
@@ -337,13 +346,13 @@ def assembleX64WindowsWithLinearScan(program: Program): String = {
     val regToRange = ranges.toMap
     val freeRegs = mutable.Set.from(X64_REGS_FOR_ALLOC)
     var spilledCount = 0
-    val allocedRegs: mutable.Map[Int, Either[Int, IntReg]] = mutable.Map.empty
+    val allocedRegs: mutable.Map[Int, Either[Int, AsmReg]] = mutable.Map.empty
     val touchedRegs: mutable.Set[Int] = mutable.Set.empty
 
     var active: List[Int] = List.empty
 
     def spill(): Unit = {
-      val (reg: Int, Right(asmReg: IntReg)) = allocedRegs.maxBy {
+      val (reg: Int, Right(asmReg: AsmReg)) = allocedRegs.maxBy {
         case (reg, Right(_)) =>
           val (s, e) = regToRange(reg)
           registerWeights(reg) / (2 + e - s)
@@ -359,7 +368,7 @@ def assembleX64WindowsWithLinearScan(program: Program): String = {
       alloc(reg, useRdx)
     } else {
       X64_REGS_FOR_ALLOC.find { newReg =>
-        freeRegs.contains(newReg) && (newReg != IntReg.RDX || useRdx)
+        freeRegs.contains(newReg) && (newReg != AsmReg.RDX || useRdx)
       } match {
         case Some(allocedReg) =>
           allocedRegs(reg) = Right(allocedReg)
@@ -462,29 +471,14 @@ def assembleX64WindowsWithLinearScan(program: Program): String = {
     }
 
     object OperandRegComputed {
-      def unapply(src: Src): Option[String => (String, String)] = src match {
-        case RefFun(fun) => Some(tempReg => (
-          asm("lea", tempReg, s"[F$fun]"),
-          tempReg
-        ))
+      def unapply(src: Src): Option[String => String] = src match {
+        case RefFun(fun) => Some(tempReg => asm("lea", tempReg, s"[F$fun]"))
         case RefMem(reg, offset) => allocedRegs(reg) match {
-          case Left(spillSlot) => Some(tempReg => (
-            asm("mov", tempReg, spillAsm(spillSlot)) + asm("lea", tempReg, s"[$tempReg + $offset]"),
-            tempReg
-          ))
-          case Right(asmReg) => Some(tempReg => (
-            asm("lea", tempReg, s"[${asmReg.qword} + $offset]"),
-            tempReg
-          ))
+          case Left(spillSlot) => Some(tempReg => asm("mov", tempReg, spillAsm(spillSlot)) + asm("lea", tempReg, s"[$tempReg + $offset]"))
+          case Right(asmReg) => Some(tempReg => asm("lea", tempReg, s"[${asmReg.qword} + $offset]"))
         }
-        case RefLoc(offset) => Some(tempReg => (
-          asm("lea", tempReg, s"[rsp + $offset]"),
-          tempReg
-        ))
-        case RefGlo(offset) => Some(tempReg => (
-          asm("lea", tempReg, s"[global_data + $offset]"),
-          tempReg
-        ))
+        case RefLoc(offset) => Some(tempReg => asm("lea", tempReg, s"[rsp + $offset]"))
+        case RefGlo(offset) => Some(tempReg => asm("lea", tempReg, s"[global_data + $offset]"))
         case _ => None
       }
     }
@@ -492,34 +486,67 @@ def assembleX64WindowsWithLinearScan(program: Program): String = {
     object OperandAnyComputed {
       def unapply(src: Src): Option[String => (String, String)] = src match {
         case OperandMemComputed(stringFunction) => Some(stringFunction)
-        case OperandRegComputed(stringFunction) => Some(stringFunction)
+        case OperandRegComputed(stringFunction) => Some(string => (stringFunction(string), string))
         case _ => None
       }
     }
 
+    // TODO: Add support for computed destinations
     def binaryOp2(name: String, dst: Dst, src: Src) = (dst, src) match {
       case (OperandReg(left), OperandAny(right)) => asm(name, left, right)
       case (OperandReg(left), OperandAnyComputed(computed)) =>
-        val (stmt, right) = computed(IntReg.RAX.qword)
+        val (stmt, right) = computed(AsmReg.RAX.qword)
         stmt + asm(name, left, right)
       case (OperandMem(left), OperandImmOrReg(right)) => asm(name, left, right)
-      case (OperandMem(left), OperandMem(right)) => asm("mov", IntReg.RAX.qword, right) + asm(name, left, IntReg.RAX.qword)
-      case (OperandMem(left), OperandRegComputed(computed)) =>
-        val (stmt, right) = computed(IntReg.RAX.qword)
-        stmt + asm(name, left, right)
+      case (OperandMem(left), OperandMem(right)) => asm("mov", AsmReg.RAX.qword, right) + asm(name, left, AsmReg.RAX.qword)
+      case (OperandMem(left), OperandRegComputed(computed)) => computed(AsmReg.RAX.qword) + asm(name, left, AsmReg.RAX.qword)
       case (OperandMem(left), OperandMemComputed(computed)) =>
-        val (stmt, right) = computed(IntReg.RAX.qword)
-        stmt + asm("mov", IntReg.RAX.qword, right) + asm(name, left, IntReg.RAX.qword)
+        val (stmt, right) = computed(AsmReg.RAX.qword)
+        stmt + asm("mov", AsmReg.RAX.qword, right) + asm(name, left, AsmReg.RAX.qword)
       case _ => assert(false, s"HANDLING OF $dst AND $src IS NOT IMPLEMENTED YET")
     }
 
-    def binaryOp3(name: String, dst: Dst, left: Src, right: Src) = ???
+    // TODO: Add support for everything
+    def binaryOp3(name: String, dst: Dst, left: Src, right: Src) = (dst, left, right) match {
+      case (OperandReg(dst), OperandReg(left), OperandImmOrReg(right)) => asm("mov", dst, left) + asm(name, dst, right)
+      case _ => assert(false, s"HANDLING OF $dst, $left AND $right IS NOT IMPLEMENTED YET")
+    }
 
+    def movOp(dataSize: DataSize, dst: Dst, src: Src) = (dataSize, dst, src) match {
+      case (_, OperandReg(dst), OperandReg(src)) if dst == src => ""
+      case (_, dst, src) if dst == src => ""
+      case (_, OperandReg(dst), OperandImmOrReg(src)) => asm("mov", dst, src)
+      case (dataSize, OperandReg(dst), OperandMem(src)) => asm(dataSize.zx, dst, dataSize.name + src)
+      case (dataSize, OperandReg(dst), OperandRegComputed(computed)) => computed(dst)
+      case (dataSize, OperandReg(dst), OperandMemComputed(computed)) =>
+        val (stmt, src) = computed(AsmReg.RAX.qword)
+        stmt + asm(dataSize.zx, dst, dataSize.name + src)
+      case (dataSize, OperandMem(dst), OperandImmOrReg(src)) => asm("mov", dataSize.name + dst, src)
+      case (dataSize, OperandMem(dst), OperandMem(src)) => asm(dataSize.zx, AsmReg.RAX.qword, dataSize.name + src) + asm("mov", dataSize.name + dst, AsmReg.RAX(dataSize))
+      case (dataSize, OperandMem(dst), OperandRegComputed(computed)) => computed(AsmReg.RAX.qword) + asm("mov", dataSize.name + dst, AsmReg.RAX(dataSize))
+      case (dataSize, OperandMem(dst), OperandMemComputed(computed)) =>
+        val (stmt, src) = computed(AsmReg.RAX.qword)
+        stmt + asm(dataSize.zx, AsmReg.RAX.qword, dataSize.name + src) + asm("mov", dataSize.name + dst, AsmReg.RAX(dataSize))
+      case _ => assert(false, s"HANDLING OF $dataSize, $dst AND $src IS NOT IMPLEMENTED YET")
+    }
+
+    // TODO: Make simple and mult op dispatch into binaryOp2 even for different registers if the registers are allocated to the same hardware register
     val asmText = fun.block.map {
       case Simple(simpleOpType, result, left, right) if result == left => binaryOp2(simpleOpType.name, result, right)
+      case Simple(simpleOpType, result, left, right) if result == right => binaryOp2(simpleOpType.name, result, left)
+      case Simple(simpleOpType, result, Imm(left), Imm(right)) => movOp(DataSize.QWord, result, Imm(simpleOpType.compute(left, right)))
       case Simple(simpleOpType, result, left, right) => binaryOp3(simpleOpType.name, result, left, right)
       case Mult(result, left, right) if result == left => binaryOp2("imul", result, right)
+      case Mult(result, left, right) if result == right => binaryOp2("imul", result, left)
+      case Mult(result, Imm(left), Imm(right)) => movOp(DataSize.QWord, result, Imm(left * right))
       case Mult(result, left, right) => binaryOp3("imul", result, left, right)
+      case Div(quotient, remainder, left, right) => ???
+      case Mov(dataSize, dst, src) => movOp(dataSize, dst, src)
+      case Print(OperandAny(src)) => asm("print", src)
+      case Print(OperandAnyComputed(computed)) =>
+        val (stmt, src) = computed(AsmReg.RAX.qword)
+        stmt + asm("print", src)
+      case Ret(values) => asm("ret")
       case op => assert(false, s"HANDLING OF $op IS NOT IMPLEMENTED YET")
     }.mkString
 
