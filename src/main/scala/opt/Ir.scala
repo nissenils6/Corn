@@ -263,7 +263,9 @@ abstract class Op {
       case BoolLit(bool) =>
         context.data(Data(this)) = (Some(asm.Imm(if bool then 1 else 0)), BoolDatatype)
       case FunLit(fun) =>
-        context.data(Data(this)) = (Some(asm.RefFun(context.funs(fun))), fun.signature)
+        val result = asm.Reg(context.reg())
+        context.data(Data(this)) = (Some(result), fun.signature)
+        context.instrs.append(asm.LeaFun(result, context.funs(fun)))
       case TupleLit(elements) =>
         val tupleType = TupleDatatype(elements.map(data => context.data(data)._2))
         val local = context.local(tupleType.size, tupleType.align)

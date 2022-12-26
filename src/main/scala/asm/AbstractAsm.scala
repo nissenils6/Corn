@@ -1,6 +1,7 @@
 package asm
 
 import core.{roundDown, roundUp}
+import sun.jvm.hotspot.HelloWorld.e
 
 import java.time.temporal.TemporalQueries.offset
 import scala.collection.mutable
@@ -24,10 +25,10 @@ case class Condition(conditionType: CondType, left: Src, right: Src) {
 sealed trait Src {
   override def toString: String = this match {
     case Imm(imm) => s"$imm"
-    case RefFun(fun) => s"&fun[$fun]"
-    case RefMem(reg, offset) => s"&[r$reg + 0x${offset.toHexString}]"
-    case RefLoc(offset) => s"&loc[0x${offset.toHexString}]"
-    case RefGlo(offset) => s"&glo[0x${offset.toHexString}]"
+    //    case RefFun(fun) => s"&fun[$fun]"
+    //    case RefMem(reg, offset) => s"&[r$reg + 0x${offset.toHexString}]"
+    //    case RefLoc(offset) => s"&loc[0x${offset.toHexString}]"
+    //    case RefGlo(offset) => s"&glo[0x${offset.toHexString}]"
     case Reg(reg) => s"r$reg"
     case Mem(reg, offset) => s"&[r$reg + 0x${offset.toHexString}]"
     case Loc(offset) => s"loc[0x${offset.toHexString}]"
@@ -36,10 +37,10 @@ sealed trait Src {
 
   def mapReg(registerMap: Map[Int, Int]): Src = this match {
     case Imm(imm) => Imm(imm)
-    case RefFun(fun) => RefFun(fun)
-    case RefMem(reg, offset) => RefMem(registerMap(reg), offset)
-    case RefLoc(offset) => RefLoc(offset)
-    case RefGlo(offset) => RefGlo(offset)
+    //    case RefFun(fun) => RefFun(fun)
+    //    case RefMem(reg, offset) => RefMem(registerMap(reg), offset)
+    //    case RefLoc(offset) => RefLoc(offset)
+    //    case RefGlo(offset) => RefGlo(offset)
   }
 }
 
@@ -64,10 +65,6 @@ sealed trait DstOff extends Dst {
 }
 
 case class Imm(imm: Long) extends Src
-case class RefFun(fun: Int) extends Src
-case class RefMem(reg: Int, offset: Int = 0) extends Src
-case class RefLoc(offset: Int) extends Src
-case class RefGlo(offset: Int) extends Src
 
 case class Reg(reg: Int) extends Dst
 
@@ -170,7 +167,7 @@ abstract class Op {
     case Print(arg) => List(arg)
   }
 
-  def destinations(): List[Src] = this match {
+  def destinations(): List[Dst] = this match {
     case Simple(_, result, _, _) => List(result)
     case Mult(result, _, _) => List(result)
     case Div(quotient, remainder, _, _) => List(quotient, remainder).flatten
@@ -184,14 +181,18 @@ abstract class Op {
     case Print(_) => List()
   }
 
+  def operands(): List[Src] = sources() ::: destinations()
+
   def registerSources(): List[Int] = sources().flatMap {
     case Reg(r) => Some(r)
     case Mem(r, _) => Some(r)
-    case RefMem(r, _) => Some(r)
     case _ => None
   }
 }
 
+case class LeaFun(var result: Dst, var fun: Int) extends Op
+case class LeaLoc(var result: Dst, var offset: Int) extends Op
+case class LeaGlo(var result: Dst, var offset: Int) extends Op
 case class Simple(var simpleOpType: SimpleOpType, var result: Dst, var left: Src, var right: Src) extends Op
 case class Mult(var result: Dst, var left: Src, var right: Src) extends Op
 case class Div(var quotient: Option[Dst], var remainder: Option[Dst], var left: Src, var right: Src) extends Op
@@ -229,6 +230,9 @@ def purgeDeadCode(program: Program): Unit = program.funs.foreach { fun =>
   }
 
   val aliveOps = fun.block.map {
+    case LeaFun(result, fun) => ???
+    case LeaLoc(result, offset) => ???
+    case LeaGlo(result, offset) => ???
     case Simple(_, Reg(reg), _, _) => reachedRegisters.contains(reg)
     case Mult(Reg(reg), _, _) => reachedRegisters.contains(reg)
     case div: Div =>
@@ -262,6 +266,12 @@ def purgeDeadCode(program: Program): Unit = program.funs.foreach { fun =>
   val registerMap = Range(0, fun.registers).filter(r => reachedRegisters.contains(r) || r <= fun.params).zipWithIndex.toMap
 
   fun.block.foreach {
+    case leaFun: LeaFun =>
+      leaFun.result = leaFun.result.mapReg(registerMap)
+    case leaLoc: LeaLoc =>
+      leaLoc.result = leaLoc.result.mapReg(registerMap)
+    case leaGlo: LeaGlo =>
+      leaGlo.result = leaGlo.result.mapReg(registerMap)
     case simpleOp: Simple =>
       simpleOp.result = simpleOp.result.mapReg(registerMap)
       simpleOp.left = simpleOp.left.mapReg(registerMap)
@@ -301,6 +311,19 @@ def purgeDeadCode(program: Program): Unit = program.funs.foreach { fun =>
 
 val X64_REGS_FOR_ALLOC: Array[AsmReg] = Array(AsmReg.RCX, AsmReg.R8, AsmReg.R9, AsmReg.R10, AsmReg.R11, AsmReg.RBX, AsmReg.RDI, AsmReg.RSI, AsmReg.RBP, AsmReg.R12, AsmReg.R13, AsmReg.R14, AsmReg.R15)
 
+def runTests(): Unit = {
+  test(
+    4,
+    Mov(DataSize.QWord, Reg(0), Imm(12)),
+    Mov(DataSize.QWord, Reg(1), Imm(18)),
+    Add(Reg(2), Reg(0), Reg(1)),
+    Print(Reg(2)),
+    Add(Reg(3), Reg(1), Imm(96))
+  )
+}
+
+def test(registers: Int, ops: Op*): Unit = assembleX64WindowsWithLinearScan(Program(Array(Fun(ops.toArray, 0, 0, registers, 0)), Array()))
+
 def assembleX64WindowsWithLinearScan(program: Program): String = {
   program.funs.foreach { fun =>
     val divInstructions = fun.block.zipWithIndex.filter(_._1.isInstanceOf[Div]).map(_._2).toSet
@@ -321,14 +344,7 @@ def assembleX64WindowsWithLinearScan(program: Program): String = {
     }
 
     fun.block.zipWithIndex.foreach { case (op, idx) =>
-      op.sources().foreach {
-        case RefMem(reg, _) => useReg(reg, idx)
-        case Reg(reg) => useReg(reg, idx)
-        case Mem(reg, _) => useReg(reg, idx)
-        case _ => ()
-      }
-
-      op.destinations().foreach {
+      op.operands().foreach {
         case Reg(reg) => useReg(reg, idx)
         case Mem(reg, _) => useReg(reg, idx)
         case _ => ()
@@ -341,7 +357,7 @@ def assembleX64WindowsWithLinearScan(program: Program): String = {
       }
     }
 
-    val ranges = (0 until fun.registers).zip(startRanges.zip(endRanges)).sortBy(_._2._1).toArray
+    val ranges = (0 until fun.registers).zip(startRanges.zip(endRanges).map { case (s, e) => s until e }).sortBy(_._2.start).toArray
 
     val regToRange = ranges.toMap
     val freeRegs = mutable.Set.from(X64_REGS_FOR_ALLOC)
@@ -354,8 +370,8 @@ def assembleX64WindowsWithLinearScan(program: Program): String = {
     def spill(): Unit = {
       val (reg: Int, Right(asmReg: AsmReg)) = allocedRegs.maxBy {
         case (reg, Right(_)) =>
-          val (s, e) = regToRange(reg)
-          registerWeights(reg) / (2 + e - s)
+          val range = regToRange(reg)
+          registerWeights(reg) / (1 + range.end - range.start)
         case _ => -1
       }
       freeRegs.add(asmReg)
@@ -381,23 +397,71 @@ def assembleX64WindowsWithLinearScan(program: Program): String = {
       }
     }
 
-    ranges.foreach { case (reg, (start, end)) =>
+    ranges.foreach { case (reg, range) =>
       val (toDealloc, newActive) = active.partition { reg =>
         val activeEnd = endRanges(reg)
-        activeEnd <= start
+        activeEnd <= range.start
       }
       active = newActive
       toDealloc.foreach { reg =>
         allocedRegs(reg).foreach(freeRegs.add)
       }
 
-      val useRdx = !divInstructions.exists((start until end).contains)
+      val useRdx = !divInstructions.exists(range.contains)
       alloc(reg, useRdx)
     }
 
-    def spillAsm(spillSlot: Int) = s"[rsp + ${fun.stackSpace.roundUp(8) + spillSlot * 8}]"
+    def asmRegsInUse(idx: Int): Array[AsmReg] = ranges.filter(_._2.contains(idx)).flatMap { case (reg, _) =>
+      allocedRegs(reg) match {
+        case Right(asmReg) => Some(asmReg)
+        case Left(_) => None
+      }
+    }
 
+    val usedAsmRegs = AsmReg.RAX :: AsmReg.RDX :: allocedRegs.values.collect {
+      case Right(asmReg) => asmReg
+    }.toList
+    val (usedPreservedRegs, usedVolatileRegs) = usedAsmRegs.partition(_.preserved)
+    val usedAsmRegsMap = usedAsmRegs.zipWithIndex.toMap
+
+    val layoutArgSize = (fun.block.map {
+      case Call(_, results, args) => results.length.max(args.length)
+      case _ => 0
+    }.max * 8).roundUp(2)
+    val layoutPreservedSize = layoutArgSize + (usedAsmRegs.length * 8).roundUp(16)
+    val layoutSpilledSize = layoutPreservedSize + (spilledCount * 8).roundUp(16)
+    val layoutLocalSize = layoutSpilledSize + fun.stackSpace.roundUp(16)
+
+    def stackLayoutParam(param: Int) = layoutLocalSize + 16 + param * 8
+    def stackLayoutLocal(local: Int) = layoutSpilledSize + local
+    def stackLayoutSpilled(spillSlot: Int) = layoutPreservedSize + spillSlot * 8
+    def stackLayoutPreserved(asmReg: AsmReg) = layoutArgSize + usedAsmRegsMap(asmReg) * 8
+    def stackLayoutArg(arg: Int) = arg * 8
+
+    // STACK LAYOUT:
+    //  - Parameters
+    //  - Return address
+    //  - Local stack-space
+    //  - Spilled registers
+    //  - Preserved registers
+    //  - Arguments/return-values
+    // <-- RSP points here
+
+    def stackLayoutAsm[T](f: T => Int)(v: T) = s"[rsp + ${f(v)}]"
     def asm(operator: String, operands: String*) = s"        ${operator.padTo(8, ' ')}${operands.mkString(", ")}\n"
+
+    val paramAsm = stackLayoutAsm(stackLayoutParam)
+    val localAsm = stackLayoutAsm(stackLayoutLocal)
+    val spillAsm = stackLayoutAsm(stackLayoutSpilled)
+    val preservedAsm = stackLayoutAsm(stackLayoutPreserved)
+    val argAsm = stackLayoutAsm(stackLayoutArg)
+
+    object Commutative {
+      def unapply(simpleOpType: SimpleOpType): Option[SimpleOpType] = simpleOpType match {
+        case Sub => None
+        case op => Some(op)
+      }
+    }
 
     object OperandImm {
       def unapply(src: Src): Option[String] = src match {
@@ -457,7 +521,7 @@ def assembleX64WindowsWithLinearScan(program: Program): String = {
       }
     }
 
-    object OperandMemComputed {
+    object OperandMemDeep {
       def unapply(src: Src): Option[String => (String, String)] = src match {
         case Mem(reg, offset) => allocedRegs(reg) match {
           case Left(spillSlot) => Some(tempReg => (
@@ -470,83 +534,89 @@ def assembleX64WindowsWithLinearScan(program: Program): String = {
       }
     }
 
-    object OperandRegComputed {
-      def unapply(src: Src): Option[String => String] = src match {
-        case RefFun(fun) => Some(tempReg => asm("lea", tempReg, s"[F$fun]"))
-        case RefMem(reg, offset) => allocedRegs(reg) match {
-          case Left(spillSlot) => Some(tempReg => asm("mov", tempReg, spillAsm(spillSlot)) + asm("lea", tempReg, s"[$tempReg + $offset]"))
-          case Right(asmReg) => Some(tempReg => asm("lea", tempReg, s"[${asmReg.qword} + $offset]"))
-        }
-        case RefLoc(offset) => Some(tempReg => asm("lea", tempReg, s"[rsp + $offset]"))
-        case RefGlo(offset) => Some(tempReg => asm("lea", tempReg, s"[global_data + $offset]"))
-        case _ => None
-      }
-    }
-
-    object OperandAnyComputed {
-      def unapply(src: Src): Option[String => (String, String)] = src match {
-        case OperandMemComputed(stringFunction) => Some(stringFunction)
-        case OperandRegComputed(stringFunction) => Some(string => (stringFunction(string), string))
-        case _ => None
-      }
-    }
-
-    // TODO: Add support for computed destinations
+    // TODO: Add support for memory-deep destinations
     def binaryOp2(name: String, dst: Dst, src: Src) = (dst, src) match {
       case (OperandReg(left), OperandAny(right)) => asm(name, left, right)
-      case (OperandReg(left), OperandAnyComputed(computed)) =>
+      case (OperandReg(left), OperandMemDeep(computed)) =>
         val (stmt, right) = computed(AsmReg.RAX.qword)
         stmt + asm(name, left, right)
+
       case (OperandMem(left), OperandImmOrReg(right)) => asm(name, left, right)
       case (OperandMem(left), OperandMem(right)) => asm("mov", AsmReg.RAX.qword, right) + asm(name, left, AsmReg.RAX.qword)
-      case (OperandMem(left), OperandRegComputed(computed)) => computed(AsmReg.RAX.qword) + asm(name, left, AsmReg.RAX.qword)
-      case (OperandMem(left), OperandMemComputed(computed)) =>
+      case (OperandMem(left), OperandMemDeep(computed)) =>
         val (stmt, right) = computed(AsmReg.RAX.qword)
         stmt + asm("mov", AsmReg.RAX.qword, right) + asm(name, left, AsmReg.RAX.qword)
+
       case _ => assert(false, s"HANDLING OF $dst AND $src IS NOT IMPLEMENTED YET")
     }
 
-    // TODO: Add support for everything
+    // TODO: Add support for memory and memory-deep destinations
     def binaryOp3(name: String, dst: Dst, left: Src, right: Src) = (dst, left, right) match {
-      case (OperandReg(dst), OperandReg(left), OperandImmOrReg(right)) => asm("mov", dst, left) + asm(name, dst, right)
+      case (OperandReg(dst), OperandMemOrReg(left), OperandAny(right)) => asm("mov", dst, left) + asm(name, dst, right)
+      case (OperandReg(dst), OperandMemDeep(computed), OperandAny(right)) =>
+        val (stmt, left) = computed(AsmReg.RAX.qword)
+        stmt + asm("mov", AsmReg.RAX.qword, left) + asm(name, AsmReg.RAX.qword, right) + asm("mov", dst, AsmReg.RAX.qword)
+
       case _ => assert(false, s"HANDLING OF $dst, $left AND $right IS NOT IMPLEMENTED YET")
     }
 
+    // TODO: Add support for memory-deep destinations
     def movOp(dataSize: DataSize, dst: Dst, src: Src) = (dataSize, dst, src) match {
       case (_, OperandReg(dst), OperandReg(src)) if dst == src => ""
       case (_, dst, src) if dst == src => ""
       case (_, OperandReg(dst), OperandImmOrReg(src)) => asm("mov", dst, src)
+
       case (dataSize, OperandReg(dst), OperandMem(src)) => asm(dataSize.zx, dst, dataSize.name + src)
-      case (dataSize, OperandReg(dst), OperandRegComputed(computed)) => computed(dst)
-      case (dataSize, OperandReg(dst), OperandMemComputed(computed)) =>
+      case (dataSize, OperandReg(dst), OperandMemDeep(computed)) =>
         val (stmt, src) = computed(AsmReg.RAX.qword)
         stmt + asm(dataSize.zx, dst, dataSize.name + src)
+
       case (dataSize, OperandMem(dst), OperandImmOrReg(src)) => asm("mov", dataSize.name + dst, src)
       case (dataSize, OperandMem(dst), OperandMem(src)) => asm(dataSize.zx, AsmReg.RAX.qword, dataSize.name + src) + asm("mov", dataSize.name + dst, AsmReg.RAX(dataSize))
-      case (dataSize, OperandMem(dst), OperandRegComputed(computed)) => computed(AsmReg.RAX.qword) + asm("mov", dataSize.name + dst, AsmReg.RAX(dataSize))
-      case (dataSize, OperandMem(dst), OperandMemComputed(computed)) =>
+      case (dataSize, OperandMem(dst), OperandMemDeep(computed)) =>
         val (stmt, src) = computed(AsmReg.RAX.qword)
         stmt + asm(dataSize.zx, AsmReg.RAX.qword, dataSize.name + src) + asm("mov", dataSize.name + dst, AsmReg.RAX(dataSize))
+
       case _ => assert(false, s"HANDLING OF $dataSize, $dst AND $src IS NOT IMPLEMENTED YET")
     }
 
-    // TODO: Make simple and mult op dispatch into binaryOp2 even for different registers if the registers are allocated to the same hardware register
-    val asmText = fun.block.map {
-      case Simple(simpleOpType, result, left, right) if result == left => binaryOp2(simpleOpType.name, result, right)
-      case Simple(simpleOpType, result, left, right) if result == right => binaryOp2(simpleOpType.name, result, left)
-      case Simple(simpleOpType, result, Imm(left), Imm(right)) => movOp(DataSize.QWord, result, Imm(simpleOpType.compute(left, right)))
-      case Simple(simpleOpType, result, left, right) => binaryOp3(simpleOpType.name, result, left, right)
-      case Mult(result, left, right) if result == left => binaryOp2("imul", result, right)
-      case Mult(result, left, right) if result == right => binaryOp2("imul", result, left)
-      case Mult(result, Imm(left), Imm(right)) => movOp(DataSize.QWord, result, Imm(left * right))
-      case Mult(result, left, right) => binaryOp3("imul", result, left, right)
-      case Div(quotient, remainder, left, right) => ???
-      case Mov(dataSize, dst, src) => movOp(dataSize, dst, src)
-      case Print(OperandAny(src)) => asm("print", src)
-      case Print(OperandAnyComputed(computed)) =>
+    def preserveRegs(idx: Int, code: String): String = {
+      val asmRegs = asmRegsInUse(idx).filterNot(_.preserved)
+      val preserve = asmRegs.map(asmReg => asm("mov", preservedAsm(asmReg), asmReg.qword)).mkString
+      val restore = asmRegs.map(asmReg => asm("mov", asmReg.qword, preservedAsm(asmReg))).mkString
+      preserve + code + restore
+    }
+
+    val asmText = fun.block.zipWithIndex.map {
+      case (LeaFun(OperandReg(dst), fun), _) => asm("lea", dst, s"[F$fun]")
+      case (LeaFun(OperandMem(dst), fun), _) => asm("lea", AsmReg.RAX.qword, s"[F$fun]") + asm("mov", dst, AsmReg.RAX.qword)
+      case (LeaFun(OperandMemDeep(computed), fun), _) =>
+        val (stmt, dst) = computed(AsmReg.RAX.qword)
+        stmt + asm("lea", AsmReg.RDX.qword, s"[F$fun]") + asm("mov", dst, AsmReg.RDX.qword)
+      case (LeaLoc(result, offset), _) => assert(false, "HANDLING OF lea-local IS NOT IMPLEMENTED YET")
+      case (LeaGlo(result, offset), _) => assert(false, "HANDLING OF lea-global IS NOT IMPLEMENTED YET")
+
+      case (Simple(simpleOpType, result, left, right), _) if result == left => binaryOp2(simpleOpType.name, result, right)
+      case (Simple(Commutative(simpleOpType), result, left, right), _) if result == right => binaryOp2(simpleOpType.name, result, left)
+      case (Simple(simpleOpType, dst@OperandReg(result), OperandReg(left), right), _) if result == left => binaryOp2(simpleOpType.name, dst, right)
+      case (Simple(Commutative(simpleOpType), dst@OperandReg(result), left, OperandReg(right)), _) if result == right => binaryOp2(simpleOpType.name, dst, left)
+      case (Simple(simpleOpType, result, Imm(left), Imm(right)), _) => movOp(DataSize.QWord, result, Imm(simpleOpType.compute(left, right)))
+      case (Simple(simpleOpType, result, left, right), _) => binaryOp3(simpleOpType.name, result, left, right)
+
+      case (Mult(result, left, right), _) if result == left => binaryOp2("imul", result, right)
+      case (Mult(result, left, right), _) if result == right => binaryOp2("imul", result, left)
+      case (Mult(dst@OperandReg(result), OperandReg(left), right), _) if result == left => binaryOp2("imul", dst, right)
+      case (Mult(dst@OperandReg(result), left, OperandReg(right)), _) if result == right => binaryOp2("imul", dst, left)
+      case (Mult(result, Imm(left), Imm(right)), _) => movOp(DataSize.QWord, result, Imm(left * right))
+      case (Mult(result, left, right), _) => binaryOp3("imul", result, left, right)
+
+      case (Div(quotient, remainder, left, right), _) => ???
+      case (Mov(dataSize, dst, src), _) => movOp(dataSize, dst, src)
+      case (Print(OperandAny(src)), idx) => preserveRegs(idx, asm("print", src))
+      case (Print(OperandMemDeep(computed)), idx) =>
         val (stmt, src) = computed(AsmReg.RAX.qword)
-        stmt + asm("print", src)
-      case Ret(values) => asm("ret")
+        preserveRegs(idx, stmt + asm("print", src))
+      case (Ret(values), _) => asm("ret")
       case op => assert(false, s"HANDLING OF $op IS NOT IMPLEMENTED YET")
     }.mkString
 

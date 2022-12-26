@@ -153,6 +153,9 @@ def parseArgs(args: List[(FilePosRange, String)], parsedArgs: ParsedArgs): Parse
       Process(filePath).!
     }
   }
+
+  println("\n\n\n\n")
+  asm.runTests()
 } catch {
   case error: CompilerError =>
     error.printStackTrace()
