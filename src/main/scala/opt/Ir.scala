@@ -160,6 +160,7 @@ class AbstractAsmContext(optUnit: OptUnit) {
   var outputDsts: Array[Option[asm.Dst]] = null
 
   var regCount = 0
+  var paramCount = 0
   var localCount = 0
   var globalCount = 0
 
@@ -171,6 +172,12 @@ class AbstractAsmContext(optUnit: OptUnit) {
     val r = regCount
     regCount += 1
     r
+  }
+
+  def param(): Int = {
+    val p = paramCount
+    paramCount += 1
+    p
   }
 
   def local(size: Int, align: Int = 8): Int = {
@@ -189,6 +196,7 @@ class AbstractAsmContext(optUnit: OptUnit) {
 
   def fun[T](locals: List[Datatype])(expression: => T): (Array[asm.Op], T) = {
     regCount = 0
+    paramCount = 0
     localCount = 0
     globalCount = 0
     localVars = locals.map(d => local(d.size, d.align)).toArray
@@ -382,10 +390,19 @@ abstract class Op {
       case RefGlobal(global, idx) => ???
       case Print(data) =>
         context.instrs.append(asm.Print(context.src(data)))
-      case Call(Left(fun), values) => ???
+      case Call(Left(fun), values) =>
+        // TODO: Tuples that are passed by value should be passed by pointer, callee makes a copy
+        // TODO: Tuples that are returned by value should be allocated by caller, then passed by pointer as parameter, no actual returning
+        // TODO: Tuple references are treated just like an integer
+        val dsts = fun.signature.returnTypes.zipWithIndex.map { case (returnType, idx) =>
+          val reg = Some(asm.Reg(context.reg()))
+          context.data(Data(Some(this), idx)) = (reg, returnType)
+          reg
+        }
+        context.instrs.append(asm.Call(Left(context.funs(fun)), dsts, values.map(context.src)))
       case Call(Right(fun), values) => ???
       case Ret(returnValues) =>
-        context.instrs.append(asm.Ret(returnValues.flatMap(data => context.srcOption(data))))
+        context.instrs.append(asm.Ret(returnValues.flatMap(context.srcOption)))
     }
     this match {
       case opNext: OpNext => opNext.next.generateAsm(context)
@@ -450,8 +467,8 @@ class OptUnit(var mainFun: Fun, var funs: List[Fun], var vars: List[Var]) {
       val (block, (params, returnValues)) = context.fun(fun.localVars) {
         fun.signature.params.zipWithIndex.foreach {
           case (UnitDatatype, _) => ()
-          case (TupleDatatype(elements), idx) => context.data(Data(None, idx)) = (Some(asm.Mem(context.reg())), TupleDatatype(elements))
-          case (datatype, idx) => context.data(Data(None, idx)) = (Some(asm.Reg(context.reg())), datatype)
+          // case (TupleDatatype(elements), idx) => context.data(Data(None, idx)) = (Some(asm.Mem(context.reg())), TupleDatatype(elements))
+          case (datatype, idx) => context.data(Data(None, idx)) = (Some(asm.Par(context.param())), datatype)
         }
 
         val params = context.regCount

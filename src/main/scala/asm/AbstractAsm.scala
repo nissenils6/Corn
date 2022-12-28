@@ -30,6 +30,7 @@ sealed trait Src {
     //    case RefLoc(offset) => s"&loc[0x${offset.toHexString}]"
     //    case RefGlo(offset) => s"&glo[0x${offset.toHexString}]"
     case Reg(reg) => s"r$reg"
+    case Par(par) => s"p$par"
     case Mem(reg, offset) => s"&[r$reg + 0x${offset.toHexString}]"
     case Loc(offset) => s"loc[0x${offset.toHexString}]"
     case Glo(offset) => s"glo[0x${offset.toHexString}]"
@@ -47,6 +48,7 @@ sealed trait Src {
 sealed trait Dst extends Src {
   override def mapReg(registerMap: Map[Int, Int]): Dst = this match {
     case Reg(reg) => Reg(registerMap(reg))
+    case Par(par) => Par(par)
   }
 }
 
@@ -67,6 +69,7 @@ sealed trait DstOff extends Dst {
 case class Imm(imm: Long) extends Src
 
 case class Reg(reg: Int) extends Dst
+case class Par(par: Int) extends Dst
 
 case class Mem(reg: Int, offset: Int = 0) extends DstOff
 case class Loc(offset: Int) extends DstOff
@@ -147,7 +150,8 @@ abstract class Op {
     case Else(_, _) => formatSimple("else")
     case EndIf(_) => formatSimple("endif")
     case CSet(condition, dst) => formatSimple(s"set if $condition ", List(Some(dst)), List())
-    case Call(fun, results, args) => formatSimple(s"call($fun)", results, args)
+    case Call(Left(fun), results, args) => formatSimple(s"call($fun)", results, args)
+    case Call(Right(fun), results, args) => formatSimple(s"call($fun)", results, args)
     case Ret(values) => formatSimple("ret", values)
     case Print(arg) => formatSimple("print", List(arg))
     case Nop => formatSimple("nop")
@@ -162,7 +166,8 @@ abstract class Op {
     case Else(_, _) => List()
     case EndIf(_) => List()
     case CSet(condition, _) => List(condition.left, condition.right)
-    case Call(fun, _, args) => fun :: args
+    case Call(Left(_), _, args) => args
+    case Call(Right(fun), _, args) => fun :: args
     case Ret(values) => values
     case Print(arg) => List(arg)
   }
@@ -201,9 +206,9 @@ case class If(var condition: Condition, var elseInstr: Int) extends Op
 case class Else(var ifInstr: Int, var endInstr: Int) extends Op
 case class EndIf(var elseInstr: Int) extends Op
 case class CSet(var condition: Condition, var dst: Dst) extends Op
-case class Call(var fun: Src, var results: List[Option[Dst]], var args: List[Src]) extends Op
-case class Ret(var values: List[Src]) extends Op
 case class Print(var arg: Src) extends Op
+case class Call(var fun: Either[Int, Src], var results: List[Option[Dst]], var args: List[Src]) extends Op
+case class Ret(var values: List[Src]) extends Op
 case object Nop extends Op
 
 class Fun(var block: Array[Op], var params: Int, var returnValues: Int, var registers: Int, var stackSpace: Int) {
@@ -263,7 +268,7 @@ def purgeDeadCode(program: Program): Unit = program.funs.foreach { fun =>
     case (_, false) => Nop
   }
 
-  val registerMap = Range(0, fun.registers).filter(r => reachedRegisters.contains(r) || r <= fun.params).zipWithIndex.toMap
+  val registerMap = Range(0, fun.registers).filter(r => reachedRegisters.contains(r)).zipWithIndex.toMap
 
   fun.block.foreach {
     case leaFun: LeaFun =>
@@ -296,7 +301,7 @@ def purgeDeadCode(program: Program): Unit = program.funs.foreach { fun =>
       cSetOp.condition = cSetOp.condition.mapReg(registerMap)
       cSetOp.dst = cSetOp.dst.mapReg(registerMap)
     case callOp: Call =>
-      callOp.fun = callOp.fun.mapReg(registerMap)
+      callOp.fun = callOp.fun.map(_.mapReg(registerMap))
       callOp.results = callOp.results.map(_.map(_.mapReg(registerMap)))
       callOp.args = callOp.args.map(_.mapReg(registerMap))
     case retOp: Ret =>
@@ -325,7 +330,7 @@ def runTests(): Unit = {
 def test(registers: Int, ops: Op*): Unit = assembleX64WindowsWithLinearScan(Program(Array(Fun(ops.toArray, 0, 0, registers, 0)), Array()))
 
 def assembleX64WindowsWithLinearScan(program: Program): String = {
-  program.funs.foreach { fun =>
+  val functionsAsm = program.funs.map { fun =>
     val divInstructions = fun.block.zipWithIndex.filter(_._1.isInstanceOf[Div]).map(_._2).toSet
 
     val registerWeights = Array.fill(fun.registers)(0)
@@ -411,7 +416,9 @@ def assembleX64WindowsWithLinearScan(program: Program): String = {
       alloc(reg, useRdx)
     }
 
-    def asmRegsInUse(idx: Int): Array[AsmReg] = ranges.filter(_._2.contains(idx)).flatMap { case (reg, _) =>
+    def asmRegsInUse(idx: Int): Array[AsmReg] = ranges.filter{ case (_, range) =>
+      range.contains(idx) && range.start != idx
+    }.flatMap { case (reg, _) =>
       allocedRegs(reg) match {
         case Right(asmReg) => Some(asmReg)
         case Left(_) => None
@@ -421,7 +428,6 @@ def assembleX64WindowsWithLinearScan(program: Program): String = {
     val usedAsmRegs = AsmReg.RAX :: AsmReg.RDX :: allocedRegs.values.collect {
       case Right(asmReg) => asmReg
     }.toList
-    val (usedPreservedRegs, usedVolatileRegs) = usedAsmRegs.partition(_.preserved)
     val usedAsmRegsMap = usedAsmRegs.zipWithIndex.toMap
 
     val layoutArgSize = (fun.block.map {
@@ -432,6 +438,8 @@ def assembleX64WindowsWithLinearScan(program: Program): String = {
     val layoutSpilledSize = layoutPreservedSize + (spilledCount * 8).roundUp(16)
     val layoutLocalSize = layoutSpilledSize + fun.stackSpace.roundUp(16)
 
+    val stackLayoutSize = layoutLocalSize + 8
+
     def stackLayoutParam(param: Int) = layoutLocalSize + 16 + param * 8
     def stackLayoutLocal(local: Int) = layoutSpilledSize + local
     def stackLayoutSpilled(spillSlot: Int) = layoutPreservedSize + spillSlot * 8
@@ -440,11 +448,12 @@ def assembleX64WindowsWithLinearScan(program: Program): String = {
 
     // STACK LAYOUT:
     //  - Parameters
-    //  - Return address
-    //  - Local stack-space
-    //  - Spilled registers
-    //  - Preserved registers
-    //  - Arguments/return-values
+    //  - Return address          ---+
+    //  - 8 byte padding             |
+    //  - Local stack-space          | One Stack Frame
+    //  - Spilled registers          |
+    //  - Preserved registers        |
+    //  - Arguments/return-values ---+
     // <-- RSP points here
 
     def stackLayoutAsm[T](f: T => Int)(v: T) = s"[rsp + ${f(v)}]"
@@ -486,6 +495,7 @@ def assembleX64WindowsWithLinearScan(program: Program): String = {
           case Left(spillSlot) => Some(spillAsm(spillSlot))
           case Right(_) => None
         }
+        case Par(par) => Some(paramAsm(par))
         case Mem(reg, offset) => allocedRegs(reg) match {
           case Left(_) => None
           case Right(asmReg) => Some(s"[${asmReg.qword} + $offset]")
@@ -587,7 +597,33 @@ def assembleX64WindowsWithLinearScan(program: Program): String = {
       preserve + code + restore
     }
 
-    val asmText = fun.block.zipWithIndex.map {
+    def callOp(callAsm: String, idx: Int, results: List[Option[Dst]], args: List[Src]) = preserveRegs(idx, {
+      val argsAsm = args.zipWithIndex.map {
+        case (OperandImmOrReg(arg), argIdx) => asm("mov", argAsm(argIdx), arg)
+        case (OperandMem(arg), argIdx) => asm("mov", AsmReg.RAX.qword, arg) + asm("mov", argAsm(argIdx), AsmReg.RAX.qword)
+        case (OperandMemDeep(computed), argIdx) =>
+          val (stmt, arg) = computed(AsmReg.RAX.qword)
+          stmt + asm("mov", AsmReg.RAX.qword, arg) + asm("mov", argAsm(argIdx), AsmReg.RAX.qword)
+        case _ =>
+          assert(false, "Unreachable")
+          ""
+      }.mkString
+
+      val retAsm = results.flatMap(_.zipWithIndex.map {
+        case (OperandReg(ret), retIdx) => asm("mov", ret, argAsm(retIdx))
+        case (OperandMem(ret), retIdx) => asm("mov", AsmReg.RAX.qword, argAsm(retIdx)) + asm("mov", ret, AsmReg.RAX.qword)
+        case (OperandMemDeep(computed), retIdx) =>
+          val (stmt, ret) = computed(AsmReg.RAX.qword)
+          asm("mov", AsmReg.RDX.qword, argAsm(retIdx)) + stmt + asm("mov", ret, AsmReg.RDX.qword)
+        case _ =>
+          assert(false, "Unreachable")
+          ""
+      }).mkString
+
+      argsAsm.mkString + callAsm + retAsm.mkString
+    })
+
+    val functionAsm = fun.block.zipWithIndex.map {
       case (LeaFun(OperandReg(dst), fun), _) => asm("lea", dst, s"[F$fun]")
       case (LeaFun(OperandMem(dst), fun), _) => asm("lea", AsmReg.RAX.qword, s"[F$fun]") + asm("mov", dst, AsmReg.RAX.qword)
       case (LeaFun(OperandMemDeep(computed), fun), _) =>
@@ -611,17 +647,45 @@ def assembleX64WindowsWithLinearScan(program: Program): String = {
       case (Mult(result, left, right), _) => binaryOp3("imul", result, left, right)
 
       case (Div(quotient, remainder, left, right), _) => ???
+
       case (Mov(dataSize, dst, src), _) => movOp(dataSize, dst, src)
+
       case (Print(OperandAny(src)), idx) => preserveRegs(idx, asm("print", src))
       case (Print(OperandMemDeep(computed)), idx) =>
         val (stmt, src) = computed(AsmReg.RAX.qword)
         preserveRegs(idx, stmt + asm("print", src))
-      case (Ret(values), _) => asm("ret")
+      case (Call(Left(fun), results, args), idx) => callOp(asm("call", s"F$fun"), idx, results, args)
+      case (Call(Right(fun), results, args), idx) => ???
+
+      case (Ret(values), _) =>
+        val returnValuesAsm = values.zipWithIndex.map {
+          case (OperandImmOrReg(ret), retIdx) => asm("mov", paramAsm(retIdx), ret)
+          case (OperandMem(ret), retIdx) => asm("mov", AsmReg.RAX.qword, ret) + asm("mov", paramAsm(retIdx), AsmReg.RAX.qword)
+          case (OperandMemDeep(computed), retIdx) =>
+            val (stmt, ret) = computed(AsmReg.RAX.qword)
+            stmt + asm("mov", AsmReg.RAX.qword, ret) + asm("mov", paramAsm(retIdx), AsmReg.RAX.qword)
+          case _ => assert(false, "Unreachable")
+        }.mkString
+        val restoreRegsAsm = usedAsmRegs.filter(_.preserved).map(asmReg => asm("mov", asmReg.qword, preservedAsm(asmReg))).mkString
+        val frameDeallocAsm = asm("sub", AsmReg.RSP.qword, s"$stackLayoutSize")
+        returnValuesAsm + restoreRegsAsm + frameDeallocAsm + asm("ret")
+
       case op => assert(false, s"HANDLING OF $op IS NOT IMPLEMENTED YET")
     }.mkString
 
-    println(asmText)
+    val frameAllocAsm = asm("sub", AsmReg.RSP.qword, s"$stackLayoutSize")
+    val preserveRegsAsm = usedAsmRegs.filter(_.preserved).map(asmReg => asm("mov", preservedAsm(asmReg), asmReg.qword)).mkString
+    frameAllocAsm + preserveRegsAsm + functionAsm
   }
+
+  functionsAsm.foreach(println)
+
+  println({
+    val fileContent = io.Source.fromFile(s"src/main/CornRuntime.asm")
+    val source = fileContent.mkString
+    fileContent.close()
+    source.mkString
+  })
 
   ""
 }

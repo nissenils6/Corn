@@ -97,7 +97,7 @@ object File {
 
   def apply(filePath: String): File = {
     val fileContent = io.Source.fromFile(s"$filePath.txt")
-    val source = fileContent.getLines().mkString("\n")
+    val source = fileContent.mkString
     fileContent.close()
     new File(filePath.split('/').last, source)
   }

@@ -290,7 +290,7 @@ def localVarInline(optUnit: OptUnit): Boolean = {
 }
 
 def inlineFunctions(optUnit: OptUnit): Boolean = {
-  val INLINE_THRESHOLD = 25
+  val INLINE_THRESHOLD = 10
 
   val functionsToInline = mutable.Map[Fun, Int]()
 
