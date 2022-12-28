@@ -4,10 +4,12 @@ import lex.Token
 import sem.{Datatype, LocalVar}
 import syn.Expr
 
+import java.io.{FileReader, PrintWriter}
 import scala.annotation.{tailrec, targetName, unused}
 import scala.collection.mutable
 import scala.io.BufferedSource
 import scala.math
+import scala.util.Using
 
 extension[T] (list: List[Option[T]]) {
   def extract: Option[List[T]] = if list.forall(_.nonEmpty) then Some(list.map(_.get)) else None
@@ -95,12 +97,7 @@ class File(val name: String, val source: String) {
 object File {
   def apply(name: String, source: String): File = new File(name, source)
 
-  def apply(filePath: String): File = {
-    val fileContent = io.Source.fromFile(s"$filePath.txt")
-    val source = fileContent.mkString
-    fileContent.close()
-    new File(filePath.split('/').last, source)
-  }
+  def apply(filePath: String): File = new File(filePath.split('/').last, slurpFile(filePath + ".txt"))
 }
 
 case class FilePosRange(start: Int, end: Int, file: File) {
@@ -141,3 +138,6 @@ case class FilePosRange(start: Int, end: Int, file: File) {
     }
   }
 }
+
+def slurpFile(filePath: String): String = Using(io.Source.fromFile(filePath))(_.mkString).get
+def printFile(filePath: String, content: String): Unit = Using(new PrintWriter(filePath))(_.write(content))

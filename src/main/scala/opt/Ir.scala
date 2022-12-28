@@ -464,14 +464,12 @@ class OptUnit(var mainFun: Fun, var funs: List[Fun], var vars: List[Var]) {
     val context = new AbstractAsmContext(this)
 
     val asmFuns = funs.map { fun =>
-      val (block, (params, returnValues)) = context.fun(fun.localVars) {
+      val (block, returnValues) = context.fun(fun.localVars) {
         fun.signature.params.zipWithIndex.foreach {
           case (UnitDatatype, _) => ()
           // case (TupleDatatype(elements), idx) => context.data(Data(None, idx)) = (Some(asm.Mem(context.reg())), TupleDatatype(elements))
           case (datatype, idx) => context.data(Data(None, idx)) = (Some(asm.Par(context.param())), datatype)
         }
-
-        val params = context.regCount
 
         val returnValues = fun.signature.returnTypes.count {
           case UnitDatatype => false
@@ -480,12 +478,12 @@ class OptUnit(var mainFun: Fun, var funs: List[Fun], var vars: List[Var]) {
 
         fun.next.generateAsm(context)
 
-        (params, returnValues)
+        returnValues
       }
-      new asm.Fun(block, params, returnValues, context.regCount, context.localCount)
+      new asm.Fun(block, context.paramCount, returnValues, context.regCount, context.localCount)
     }.toArray
 
-    new asm.Program(asmFuns, Array.empty)
+    new asm.Program(asmFuns, Array.empty, funs.indexOf(mainFun))
   }
 }
 

@@ -100,6 +100,16 @@ runtime_init:
         add     rsp, 48
         ret
 
+start:
+        sub     rsp, 8
+        call    runtime_init
+
+        call    ;#[ENTRY]
+
+        xor     rcx, rcx
+        call    qword[ExitProcess]
+        ret
+
 ;#[CODE]
 
 section '.data' data readable writeable

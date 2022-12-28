@@ -1,11 +1,10 @@
 package asm
 
-import core.{roundDown, roundUp}
-import sun.jvm.hotspot.HelloWorld.e
+import core.{roundDown, roundUp, slurpFile}
 
-import java.time.temporal.TemporalQueries.offset
 import scala.collection.mutable
 import scala.compiletime.ops.string
+import scala.util.Using
 
 enum CondType(val name: String) {
   case Gt extends CondType(">")
@@ -166,10 +165,11 @@ abstract class Op {
     case Else(_, _) => List()
     case EndIf(_) => List()
     case CSet(condition, _) => List(condition.left, condition.right)
+    case Print(arg) => List(arg)
     case Call(Left(_), _, args) => args
     case Call(Right(fun), _, args) => fun :: args
     case Ret(values) => values
-    case Print(arg) => List(arg)
+    case Nop => List()
   }
 
   def destinations(): List[Dst] = this match {
@@ -181,9 +181,10 @@ abstract class Op {
     case Else(_, _) => List()
     case EndIf(_) => List()
     case CSet(_, dst) => List(dst)
+    case Print(_) => List()
     case Call(_, results, _) => results.flatten
     case Ret(values) => List()
-    case Print(_) => List()
+    case Nop => List()
   }
 
   def operands(): List[Src] = sources() ::: destinations()
@@ -215,7 +216,7 @@ class Fun(var block: Array[Op], var params: Int, var returnValues: Int, var regi
   def format(id: Int): String = s"fun[$id] (parameters = $params, return values = $returnValues, registers = $registers, local stack space = $stackSpace)\n${block.map(_.format()).mkString}"
 }
 
-class Program(val funs: Array[Fun], val data: Array[Byte]) {
+class Program(val funs: Array[Fun], val data: Array[Byte], val entryFun: Int) {
   override def toString: String = s"${
     funs.zipWithIndex.map { case (fun, id) =>
       fun.format(id)
@@ -316,21 +317,8 @@ def purgeDeadCode(program: Program): Unit = program.funs.foreach { fun =>
 
 val X64_REGS_FOR_ALLOC: Array[AsmReg] = Array(AsmReg.RCX, AsmReg.R8, AsmReg.R9, AsmReg.R10, AsmReg.R11, AsmReg.RBX, AsmReg.RDI, AsmReg.RSI, AsmReg.RBP, AsmReg.R12, AsmReg.R13, AsmReg.R14, AsmReg.R15)
 
-def runTests(): Unit = {
-  test(
-    4,
-    Mov(DataSize.QWord, Reg(0), Imm(12)),
-    Mov(DataSize.QWord, Reg(1), Imm(18)),
-    Add(Reg(2), Reg(0), Reg(1)),
-    Print(Reg(2)),
-    Add(Reg(3), Reg(1), Imm(96))
-  )
-}
-
-def test(registers: Int, ops: Op*): Unit = assembleX64WindowsWithLinearScan(Program(Array(Fun(ops.toArray, 0, 0, registers, 0)), Array()))
-
 def assembleX64WindowsWithLinearScan(program: Program): String = {
-  val functionsAsm = program.funs.map { fun =>
+  val functionsAsm = program.funs.zipWithIndex.map { case (fun, funIdx) =>
     val divInstructions = fun.block.zipWithIndex.filter(_._1.isInstanceOf[Div]).map(_._2).toSet
 
     val registerWeights = Array.fill(fun.registers)(0)
@@ -416,7 +404,7 @@ def assembleX64WindowsWithLinearScan(program: Program): String = {
       alloc(reg, useRdx)
     }
 
-    def asmRegsInUse(idx: Int): Array[AsmReg] = ranges.filter{ case (_, range) =>
+    def asmRegsInUse(idx: Int): Array[AsmReg] = ranges.filter { case (_, range) =>
       range.contains(idx) && range.start != idx
     }.flatMap { case (reg, _) =>
       allocedRegs(reg) match {
@@ -425,15 +413,15 @@ def assembleX64WindowsWithLinearScan(program: Program): String = {
       }
     }
 
-    val usedAsmRegs = AsmReg.RAX :: AsmReg.RDX :: allocedRegs.values.collect {
+    val usedAsmRegs = allocedRegs.values.collect {
       case Right(asmReg) => asmReg
-    }.toList
+    }.toSet.toList
     val usedAsmRegsMap = usedAsmRegs.zipWithIndex.toMap
 
     val layoutArgSize = (fun.block.map {
       case Call(_, results, args) => results.length.max(args.length)
       case _ => 0
-    }.max * 8).roundUp(2)
+    }.max * 8).roundUp(16)
     val layoutPreservedSize = layoutArgSize + (usedAsmRegs.length * 8).roundUp(16)
     val layoutSpilledSize = layoutPreservedSize + (spilledCount * 8).roundUp(16)
     val layoutLocalSize = layoutSpilledSize + fun.stackSpace.roundUp(16)
@@ -456,7 +444,10 @@ def assembleX64WindowsWithLinearScan(program: Program): String = {
     //  - Arguments/return-values ---+
     // <-- RSP points here
 
-    def stackLayoutAsm[T](f: T => Int)(v: T) = s"[rsp + ${f(v)}]"
+    def stackLayoutAsm[T](f: T => Int)(v: T) = f(v) match {
+      case 0 => s"[rsp]"
+      case n => s"[rsp + $n]"
+    }
     def asm(operator: String, operands: String*) = s"        ${operator.padTo(8, ' ')}${operands.mkString(", ")}\n"
 
     val paramAsm = stackLayoutAsm(stackLayoutParam)
@@ -500,7 +491,7 @@ def assembleX64WindowsWithLinearScan(program: Program): String = {
           case Left(_) => None
           case Right(asmReg) => Some(s"[${asmReg.qword} + $offset]")
         }
-        case Loc(offset) => Some(s"[rsp + $offset]")
+        case Loc(offset) => Some(localAsm(offset))
         case Glo(offset) => Some(s"[global_data + $offset]")
         case _ => None
       }
@@ -650,10 +641,10 @@ def assembleX64WindowsWithLinearScan(program: Program): String = {
 
       case (Mov(dataSize, dst, src), _) => movOp(dataSize, dst, src)
 
-      case (Print(OperandAny(src)), idx) => preserveRegs(idx, asm("print", src))
+      case (Print(OperandAny(src)), idx) => preserveRegs(idx, asm("mov", AsmReg.RAX.qword, src) + asm("call", "println_i64"))
       case (Print(OperandMemDeep(computed)), idx) =>
         val (stmt, src) = computed(AsmReg.RAX.qword)
-        preserveRegs(idx, stmt + asm("print", src))
+        preserveRegs(idx, stmt + asm("mov", AsmReg.RAX.qword, src) + asm("call", "println_i64"))
       case (Call(Left(fun), results, args), idx) => callOp(asm("call", s"F$fun"), idx, results, args)
       case (Call(Right(fun), results, args), idx) => ???
 
@@ -667,25 +658,18 @@ def assembleX64WindowsWithLinearScan(program: Program): String = {
           case _ => assert(false, "Unreachable")
         }.mkString
         val restoreRegsAsm = usedAsmRegs.filter(_.preserved).map(asmReg => asm("mov", asmReg.qword, preservedAsm(asmReg))).mkString
-        val frameDeallocAsm = asm("sub", AsmReg.RSP.qword, s"$stackLayoutSize")
+        val frameDeallocAsm = asm("add", AsmReg.RSP.qword, s"$stackLayoutSize")
         returnValuesAsm + restoreRegsAsm + frameDeallocAsm + asm("ret")
 
+      case (Nop, _) => ""
       case op => assert(false, s"HANDLING OF $op IS NOT IMPLEMENTED YET")
     }.mkString
 
+    val functionLabelAsm = s"F$funIdx:\n"
     val frameAllocAsm = asm("sub", AsmReg.RSP.qword, s"$stackLayoutSize")
     val preserveRegsAsm = usedAsmRegs.filter(_.preserved).map(asmReg => asm("mov", preservedAsm(asmReg), asmReg.qword)).mkString
-    frameAllocAsm + preserveRegsAsm + functionAsm
-  }
+    functionLabelAsm + frameAllocAsm + preserveRegsAsm + functionAsm
+  }.mkString("\n")
 
-  functionsAsm.foreach(println)
-
-  println({
-    val fileContent = io.Source.fromFile(s"src/main/CornRuntime.asm")
-    val source = fileContent.mkString
-    fileContent.close()
-    source.mkString
-  })
-
-  ""
+  slurpFile("src/main/scala/asm/CornRuntime.asm").replace(";#[ENTRY]", s"F${program.entryFun}").replace(";#[CODE]", functionsAsm).replace(";#[DATA]", "")
 }

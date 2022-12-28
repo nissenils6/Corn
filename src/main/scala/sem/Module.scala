@@ -87,10 +87,6 @@ abstract class Fun {
 
   def constEval(args: List[ConstVal]): Option[ConstVal]
 
-  def generateCode(): List[Instr]
-
-  def generateInlineCode(ctx: ExprCodeGenContext): Boolean
-
   def runtime: Boolean
 
   def compiletime: Boolean
@@ -98,29 +94,14 @@ abstract class Fun {
   def gatherFuns(funs: mutable.Set[Fun]): Unit
 
   lazy val signature: FunDatatype = FunDatatype(argTypes.map(_.withMut(false)), returnType.withMut(false), false)
-
-  private var labelInternal: Option[String] = None
-
-  def label: String = labelInternal match {
-    case Some(label) => label
-    case None =>
-      val label = AsmGen.functionLabel()
-      labelInternal = Some(label)
-      AsmGen.function(label, generateCode())
-      label
-  }
 }
 
-class BuiltinFun(val module: Module, val argTypes: List[Datatype], val returnType: Datatype, eval: Option[List[ConstVal] => ConstVal], generate: () => List[Instr], graph: => Option[opt.Fun], inlineGenerate: ExprCodeGenContext => Boolean = _ => false) extends Fun {
+class BuiltinFun(val module: Module, val argTypes: List[Datatype], val returnType: Datatype, eval: Option[List[ConstVal] => ConstVal], graph: => Option[opt.Fun]) extends Fun {
   override def range: FilePosRange = module.file.lastRange
 
   override def format(indentation: Int): String = s"builtin fun(${argTypes.mkString(", ")}): $returnType"
 
   override def constEval(args: List[ConstVal]): Option[ConstVal] = eval.map(_ (args))
-
-  override def generateCode(): List[Instr] = generate()
-
-  override def generateInlineCode(ctx: ExprCodeGenContext): Boolean = inlineGenerate(ctx)
 
   def generateIr: opt.Fun = graph.get
 
@@ -159,29 +140,6 @@ class UserFun(val module: Module, parameters: List[syn.Pattern], retTypeExpr: Op
     args.zip(arguments).foreach(t => ctx.add(t._1, t._2))
     analyzedExpr.constEval(ctx)
   }
-
-  override def generateCode(): List[Instr] = {
-    val ctx = new ExprCodeGenContext()
-
-    params.values.foreach(ctx.add)
-
-    def iterateArgs(arg: Pattern[LocalVar], offset: Int): Unit = arg match {
-      case VarPattern(patternVar, _) => patternVar.datatype.generateCopyCode(ctx, Reg.RSP + ctx.lookup(patternVar), Reg.RBP + offset)
-      case TuplePattern(elements, _) => elements.zip(Datatype.alignSequence(elements.map(_.datatype))._3.map(_ + offset)).foreach(iterateArgs.tupled)
-    }
-
-    args.foldLeft(0) { (offset, arg) =>
-      iterateArgs(arg, offset)
-      offset + arg.datatype.size
-    }
-
-    analyzedExpr.generateCode(ctx)
-
-    ctx.add(Ret())
-    ctx.code
-  }
-
-  override def generateInlineCode(ctx: ExprCodeGenContext): Boolean = false
 
   def generateIr(fun: opt.Fun, context: IrGenContext): Unit = {
     val localVarsList = analyzedExpr.gatherLocals.concat(params.values)

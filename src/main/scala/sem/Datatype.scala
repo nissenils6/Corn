@@ -56,19 +56,6 @@ abstract class Datatype {
     case FunDatatype(params, returnType, _) => FunDatatype(params, returnType, mutable)
   }
 
-  def generateCopyCode(ctx: ExprCodeGenContext, dst: Address, src: Address): Unit = this match {
-    case UnitDatatype(_) => ()
-    case IntDatatype(_) | RefDatatype(_, _) | FunDatatype(_, _, _) => ctx.add(
-      Load(Reg.RAX, src),
-      Store(dst, Reg.RAX)
-    )
-    case BoolDatatype(_) => ctx.add(
-      Load(Reg.RAX, src, RegSize.Byte),
-      Store(dst, Reg.RAX, RegSize.Byte)
-    )
-    case TupleDatatype(elements, _) => elements.zip(Datatype.alignSequence(elements)._3).foreach(t => t._1.generateCopyCode(ctx, dst + t._2, src + t._2))
-  }
-
   override def toString: String = (if mutable then "mut " else "") + (this match {
     case UnitDatatype(_) => s"()"
     case IntDatatype(_) => s"Int"
@@ -146,21 +133,6 @@ abstract class ConstVal {
   def asRef: Option[ConstRef] = if isInstanceOf[ConstRef] then Some(asInstanceOf[ConstRef]) else None
   def asTuple: Option[ConstTuple] = if isInstanceOf[ConstTuple] then Some(asInstanceOf[ConstTuple]) else None
   def asFun: Option[ConstFunction] = if isInstanceOf[ConstFunction] then Some(asInstanceOf[ConstFunction]) else None
-
-  def generateCode(address: Address): List[Instr] = this match {
-    case ConstInt(int) if int.toInt == int => List(StoreImm(address, int.toInt))
-    case ConstInt(int) => List(
-      LoadImm(Reg.RAX, int),
-      Store(address, Reg.RAX)
-    )
-    case ConstBool(bool) => List(StoreImm(address, if bool then 1 else 0, RegSize.Byte))
-    case ConstTuple(elements) => elements.zip(Datatype.alignSequence(elements.map(_.datatype))._3).flatMap { (element, offset) => element.generateCode(address + offset) }
-    case ConstFunction(function) => List(
-      Lea(Reg.RAX, Address(function.label)),
-      Store(address, Reg.RAX)
-    )
-    case ConstUnit | ConstType(_) => List.empty
-  }
 
   def gatherFuns(funs: mutable.Set[Fun]): Unit = this match {
     case ConstTuple(elements) => elements.foreach(_.gatherFuns(funs))

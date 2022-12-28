@@ -4,8 +4,7 @@ import lex.{LexerState, tokenize}
 import sem.analyzeFile
 import syn.{GlobalStmt, ParserState, parseFile}
 
-import java.io.PrintWriter
-import scala.languageFeature.implicitConversions
+import core.printFile
 import scala.sys.process.{Process, ProcessLogger}
 
 // optimization, while loops, heap allocation, closures, partial application, structs, unions, generics, builtin datatypes, io, for comprehensions, match expressions
@@ -23,6 +22,7 @@ Options:
 -ast          Prints the entire generated abstract syntax tree from the Syntax Analysis to a ".ast.txt" file
 -dec_ast      Prints the entire generated decorated abstract syntax tree from the Semantic Analysis to a ".dec_ast.txt" file
 -opt_graph    Prints the graph of intermediate representation used during optimization to a ".opt_graph.txt" file and compiles it to a ".opt_graph.svg" file
+-abs_asm      Prints the abstract assembly generated as an intermediate step of machine code generation to a ".asb_asm.txt" file
 
 All generated files are named after the input file name, but have different suffixes.""".replace("\r\n", "\n")
 
@@ -52,11 +52,6 @@ def window(title: String, string: String): String = {
   "\n" + topLine + padLine * inset + contentLines.mkString + padLine * inset + bottomLine
 }
 
-def printFile(path: String, content: String): Unit = new PrintWriter(path) {
-  write(content)
-  close()
-}
-
 case class ParsedArgs(filePath: Option[String] = None, options: Int = 0) {
   def enabled(option: Int): Boolean = (options & option) > 0
 }
@@ -69,8 +64,9 @@ object ParsedArgs {
   val AST = 0x10
   val DEC_AST = 0x20
   val OPT_GRAPH = 0x40
+  val ABS_ASM = 0x40
 
-  val OPTIONS: Map[String, Int] = Map("-help" -> HELP, "-comp_info" -> COMP_INFO, "-run" -> RUN, "-tokens" -> TOKENS, "-ast" -> AST, "-dec_ast" -> DEC_AST, "-opt_graph" -> OPT_GRAPH)
+  val OPTIONS: Map[String, Int] = Map("-help" -> HELP, "-comp_info" -> COMP_INFO, "-run" -> RUN, "-tokens" -> TOKENS, "-ast" -> AST, "-dec_ast" -> DEC_AST, "-opt_graph" -> OPT_GRAPH, "-abs_asm" -> ABS_ASM)
 }
 
 def parseArgs(args: List[(FilePosRange, String)], parsedArgs: ParsedArgs): ParsedArgs = args match {
@@ -105,12 +101,29 @@ def parseArgs(args: List[(FilePosRange, String)], parsedArgs: ParsedArgs): Parse
     (parsedFile, parseTime) = time(parseFile(tokens, file))
     (module, semTime) = time(analyzeFile(parsedFile, file))
     (optUnit, irTime) = time(module.generateIr())
+    (_, optTime) = time({
+      opt.globalVarInline(optUnit)
+      opt.funExprInline(optUnit)
+      opt.inlineFunctions(optUnit)
+      opt.localVarInline(optUnit)
+      opt.deadCodeElimination(optUnit)
+      opt.deadBlockElimination(optUnit)
+    })
+    (asmProgram, absAsmTime) = time({
+      val asmProgram = optUnit.generateAsm()
+      asm.purgeDeadCode(asmProgram)
+      asmProgram
+    })
+    (assembly, asmTime) = time(asm.assembleX64WindowsWithLinearScan(asmProgram))
   } {
     if (parsedArgs.enabled(ParsedArgs.COMP_INFO)) println(window("COMPILATION INFO", List(
-      s"Lexical Analyser runtime:                      ${formatTime(lexTime)}",
-      s"Syntax Analyser runtime:                       ${formatTime(parseTime)}",
-      s"Semantic Analyser runtime:                     ${formatTime(semTime)}",
-      s"Intermediate Representation Generator runtime: ${formatTime(irTime)}"
+      s"Lexical Analysis runtime:                            ${formatTime(lexTime)}",
+      s"Syntax Analysis runtime:                             ${formatTime(parseTime)}",
+      s"Semantic Analysis runtime:                           ${formatTime(semTime)}",
+      s"Intermediate Representation Generation runtime:      ${formatTime(irTime)}",
+      s"Code Optimization runtime:                           ${formatTime(optTime)}",
+      s"Abstract Assembly Generation runtime:                ${formatTime(absAsmTime)}",
+      s"Register Allocation and Assembly Generation runtime: ${formatTime(asmTime)}"
     ).mkString("\n")))
 
     if (parsedArgs.enabled(ParsedArgs.TOKENS)) {
@@ -128,25 +141,13 @@ def parseArgs(args: List[(FilePosRange, String)], parsedArgs: ParsedArgs): Parse
     if (parsedArgs.enabled(ParsedArgs.OPT_GRAPH)) {
       printFile(filePath + ".opt_graph.txt", optUnit.format())
       Process(s"dot -Tsvg $filePath.opt_graph.txt -o $filePath.opt_graph.svg").!(ProcessLogger(_ => ()))
-      opt.globalVarInline(optUnit)
-      opt.funExprInline(optUnit)
-      opt.inlineFunctions(optUnit)
-      printFile(filePath + ".opt_graph_1.txt", optUnit.format())
-      Process(s"dot -Tsvg $filePath.opt_graph_1.txt -o $filePath.opt_graph_1.svg").!(ProcessLogger(_ => ()))
-      opt.localVarInline(optUnit)
-      opt.deadCodeElimination(optUnit)
-      opt.deadBlockElimination(optUnit)
-
-      val asmProgram = optUnit.generateAsm()
-
-      println(window("ABSTRACT ASSEMBLY", asmProgram.toString))
-      asm.purgeDeadCode(asmProgram)
-      println(window("ABSTRACT ASSEMBLY OPTIMIZED", asmProgram.toString))
-      asm.assembleX64WindowsWithLinearScan(asmProgram)
-      println("\n\n\n\n")
     }
 
-    printFile(filePath + ".asm", AsmGen.toString)
+    if (parsedArgs.enabled(ParsedArgs.ABS_ASM)) {
+      printFile(filePath + ".abs_asm.txt", asmProgram.toString)
+    }
+
+    printFile(filePath + ".asm", assembly)
     Process(s"fasm $filePath.asm $filePath.exe").!(ProcessLogger(_ => ()))
 
     if (parsedArgs.enabled(ParsedArgs.RUN)) {
