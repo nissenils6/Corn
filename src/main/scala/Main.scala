@@ -78,6 +78,8 @@ def parseArgs(args: List[(FilePosRange, String)], parsedArgs: ParsedArgs): Parse
 }
 
 @main def main(args: String*): Unit = try {
+  return syn.testParsingLibrary()
+
   val cmdFile = File("Command Line", args.map {
     case arg if arg.contains(' ') => s"'$arg'"
     case arg => arg

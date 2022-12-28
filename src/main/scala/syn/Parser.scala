@@ -38,7 +38,7 @@ abstract class Expr {
     case LetExpr(pattern, expr, _) => s"let ${pattern.format(indentation)} = ${expr.format(indentation)}"
     case AssignExpr(left, right, _) => s"${left.format(indentation)} = ${right.format(indentation)}"
     case FunExpr(parameters, returnType, expr, _) => s"fn(${parameters.map(_.format(indentation)).mkString(", ")})${returnType.map(returnType => s": ${returnType.format(indentation)}").getOrElse("")} => ${expr.format(indentation)}"
-    case FunTypeExpr(parameters, returnType, _) => s"(${parameters.map(_.format(indentation))}) => ${returnType.format(indentation)}"
+    case FunctionTypeExpr(parameters, returnType, _) => s"(${parameters.map(_.format(indentation))}) => ${returnType.format(indentation)}"
     case IfExpr(condition, ifBlock, elseBlock, _) => s"if ${condition.format(indentation)} then ${ifBlock.format(indentation)} else ${elseBlock.format(indentation)}"
     case MutExpr(expr, mutable, _, _) => s"${if mutable then "mut" else "const"} ${expr.format(indentation)}"
   }
@@ -57,10 +57,23 @@ case class DotExpr(expr: Expr, iden: String, range: FilePosRange) extends Expr
 case class LetExpr(pattern: Pattern, expr: Expr, range: FilePosRange) extends Expr
 case class AssignExpr(left: Expr, right: Expr, range: FilePosRange) extends Expr
 case class FunExpr(parameters: List[Pattern], returnType: Option[Expr], expr: Expr, range: FilePosRange) extends Expr
-case class FunTypeExpr(parameters: List[Expr], returnType: Expr, range: FilePosRange) extends Expr
+case class FunctionTypeExpr(parameters: List[Expr], returnType: Expr, range: FilePosRange) extends Expr
 case class IfExpr(condition: Expr, ifBlock: Expr, elseBlock: Expr, range: FilePosRange) extends Expr
 case class WhileExpr(condition: Expr, ifBlock: Expr, range: FilePosRange) extends Expr
 case class MutExpr(expr: Expr, mutable: Boolean, range: FilePosRange, kwRange: FilePosRange) extends Expr
+
+abstract class TypeExpr {
+  def range: FilePosRange
+
+  def toString: String = ???
+}
+
+case class UnitTypeExpr(range: FilePosRange) extends TypeExpr
+case class IdenTypeExpr(iden: String, range: FilePosRange) extends TypeExpr
+case class TupleTypeExpr(elements: List[TypeExpr], range: FilePosRange) extends TypeExpr
+case class MutTypeExpr(typeExpr: TypeExpr, range: FilePosRange) extends TypeExpr
+case class RefTypeExpr(typeExpr: TypeExpr, range: FilePosRange) extends TypeExpr
+case class FunTypeExpr(params: List[TypeExpr], returnType: TypeExpr, range: FilePosRange) extends TypeExpr
 
 abstract class Pattern {
   def range: FilePosRange
@@ -131,7 +144,7 @@ private def parseExpr(precedence: Int)(state: ParserState): (Expr, ParserState) 
     newState.tokens match {
       case SymbolToken("=>", _) :: returnTypeTokens if lex.FUN_TYPE_LIT_PRECEDENCE >= precedence =>
         val (returnTypeExpr, lastState) = parseExpr(0)(newState withTokens returnTypeTokens)
-        (FunTypeExpr(exprs, returnTypeExpr, startRange | returnTypeExpr.range), lastState)
+        (FunctionTypeExpr(exprs, returnTypeExpr, startRange | returnTypeExpr.range), lastState)
       case _ => parseExprAfter(precedence)(exprs match {
         case List() => UnitExpr(startRange | endRange)
         case List(expr) => expr
@@ -185,7 +198,7 @@ private def parseExprAfter(precedence: Int)(expr: Expr, state: ParserState): (Ex
     parseExprAfter(precedence)(CallExpr(expr, exprs, expr.range | endRange), newState)
   case SymbolToken("=>", _) :: returnTypeTokens if lex.FUN_TYPE_LIT_PRECEDENCE >= precedence =>
     val (returnTypeExpr, lastState) = parseExpr(lex.FUN_TYPE_LIT_PRECEDENCE)(state withTokens returnTypeTokens)
-    (FunTypeExpr(List(expr), returnTypeExpr, expr.range | returnTypeExpr.range), lastState)
+    (FunctionTypeExpr(List(expr), returnTypeExpr, expr.range | returnTypeExpr.range), lastState)
   case SymbolToken("=", _) :: exprTokens if lex.ASSIGNMENT_PRECEDENCE >= precedence =>
     val (subExpr, lastState) = parseExpr(lex.ASSIGNMENT_PRECEDENCE)(state withTokens exprTokens)
     (AssignExpr(expr, subExpr, expr.range | subExpr.range), lastState)

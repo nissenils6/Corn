@@ -469,7 +469,7 @@ def analyzeExpr(ctx: ExprParsingContext)(expr: syn.Expr): Expr = expr match {
   case syn.FunExpr(parameters, returnType, expr, range) =>
     val fun = new UserFun(ctx.module, parameters, returnType, expr, range)
     FunExpr(fun, ctx.module, range)
-  case syn.FunTypeExpr(parameters, returnType, range) => FunTypeExpr(parameters.map(analyzeExpr(ctx)), analyzeExpr(ctx)(returnType), ctx.module, range)
+  case syn.FunctionTypeExpr(parameters, returnType, range) => FunTypeExpr(parameters.map(analyzeExpr(ctx)), analyzeExpr(ctx)(returnType), ctx.module, range)
   case syn.IfExpr(condition, ifBlock, elseBlock, range) =>
     val analyzedCondition = analyzeExpr(ctx)(condition)
     if (analyzedCondition.returnType !~=> BoolDatatype(false)) throw Error(Error.SEMANTIC, range.file, List(ErrorComponent(analyzedCondition.range, Some(s"Expected 'Bool', found '${analyzedCondition.returnType}'"))))
