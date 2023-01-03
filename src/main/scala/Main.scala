@@ -1,5 +1,4 @@
 import core.{CompilerError, Error, ErrorComponent, ErrorGroup, File, FilePosRange}
-import gen.AsmGen
 import lex.{LexerState, tokenize}
 import sem.analyzeFile
 import syn.{GlobalStmt, ParserState, parseFile}

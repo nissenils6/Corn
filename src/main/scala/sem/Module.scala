@@ -1,7 +1,6 @@
 package sem
 
 import core.*
-import gen.*
 
 import scala.collection.mutable
 
@@ -21,8 +20,6 @@ abstract class GlobalVar extends Var {
   def runtime: Boolean
 
   def compiletime: Boolean
-
-  lazy val label: Option[String] = if datatype.runtime then Some(AsmGen.bss(datatype.size.roundUp(8), datatype.align)) else None
 }
 
 class BuiltinGlobalVar(module: => Module, val name: String, value: ConstVal) extends GlobalVar {

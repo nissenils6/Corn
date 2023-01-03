@@ -3,21 +3,22 @@ package syn
 import core.*
 import lex.*
 
+import scala.collection.mutable
 import scala.annotation.targetName
 import scala.compiletime.ops.{int, string}
 
 abstract class ParserError {
   @targetName("combine")
   def |(e: ParserError): ParserError = (this, e) match {
-    case (ParserErrorExpected(found, expected1), ParserErrorExpected(_, expected2)) => ParserErrorExpected(found, expected1.concat(expected2))
+    case (ParserErrorExpected(_, _, expected1), ParserErrorExpected(found, range, expected2)) => ParserErrorExpected(found, range, expected1.concat(expected2))
   }
 }
 
-case class ParserErrorExpected(found: String, expected: List[String]) extends ParserError
+case class ParserErrorExpected(found: String, range: Option[FilePosRange], expected: List[String]) extends ParserError
 
 case class Parser[+R](t: List[Token] => Either[ParserError, (List[Token], R)]) {
   @inline
-  @targetName("penetrate")
+  @targetName("map")
   def <#>[R2](f: R => R2): Parser[R2] = Parser { s =>
     t(s).map { case (ns, r) =>
       (ns, f(r))
@@ -108,8 +109,34 @@ case class Parser[+R](t: List[Token] => Either[ParserError, (List[Token], R)]) {
           }
         }
         error.toLeft((cs, list.reverse))
+      case Left(e) => Right((s, List()))
+    }
+  }
+  
+  def filter(f: R => Boolean, e: R => ParserError) = Parser { s =>
+    t(s) match {
+      case Right((ns, r)) if f(r) => Right((ns, r))
+      case Right((_, r)) => Left(e(r))
       case Left(e) => Left(e)
     }
+  }
+}
+
+object Parser {
+  def alternative[R](ps: List[() => Parser[R]]): Parser[R] = Parser { s =>
+    val errors: mutable.Buffer[ParserError] = mutable.Buffer.empty
+    var result: Option[(List[Token], R)] = None
+    ps.find { p =>
+      p().t(s) match {
+        case Right((ns, r)) =>
+          result = Some((ns, r))
+          true
+        case Left(error) =>
+          errors.append(error)
+          false
+      }
+    }
+    result.toRight(errors.foldRight(ParserErrorExpected("", None, List.empty) : ParserError)(_ | _))
   }
 }
 
@@ -141,72 +168,28 @@ extension[A, B] (parser: Parser[A => B]) {
 
 def parseKeyword(keyword: String): Parser[FilePosRange] = Parser {
   case KeywordToken(kw, range) :: rest if keyword == kw => Right((rest, range))
-  case token :: _ => Left(ParserErrorExpected(token.toString, List(s"'$keyword'")))
-  case _ => Left(ParserErrorExpected("End of file", List(s"'$keyword'")))
+  case token :: _ => Left(ParserErrorExpected(token.format, Some(token.range), List(s"'$keyword'")))
+  case _ => Left(ParserErrorExpected("End of file", None, List(s"'$keyword'")))
 }
 
 def parseSymbol(symbol: String): Parser[FilePosRange] = Parser {
   case SymbolToken(sym, range) :: rest if symbol == sym => Right((rest, range))
-  case token :: _ => Left(ParserErrorExpected(token.toString, List(s"'$symbol'")))
-  case _ => Left(ParserErrorExpected("End of file", List(s"'$symbol'")))
+  case token :: _ => Left(ParserErrorExpected(token.format, Some(token.range), List(s"'$symbol'")))
+  case _ => Left(ParserErrorExpected("End of file", None, List(s"'$symbol'")))
 }
 
-val parseInt = Parser {
-  case IntToken(int, range) :: rest => Right((rest, IntExpr(int, range)))
-  case token :: _ => Left(ParserErrorExpected(token.toString, List(s"integer literal")))
-  case _ => Left(ParserErrorExpected("End of file", List(s"integer literal")))
+val parseIden: Parser[(FilePosRange, String)] = Parser {
+  case IdenToken(iden, range) :: rest => Right((rest, (range, iden)))
+  case token :: _ => Left(ParserErrorExpected(token.format, Some(token.range), List(s"identifier")))
+  case _ => Left(ParserErrorExpected("End of file", None, List(s"identifier")))
 }
 
-val parseBool = Parser {
-  case KeywordToken("true", range) :: rest => Right((rest, BoolExpr(true, range)))
-  case KeywordToken("false", range) :: rest => Right((rest, BoolExpr(false, range)))
-  case token :: _ => Left(ParserErrorExpected(token.toString, List(s"string literal")))
-  case _ => Left(ParserErrorExpected("End of file", List(s"string literal")))
-}
-
-val parseIden = Parser {
-  case IdenToken(iden, range) :: rest => Right((rest, IdenExpr(iden, range)))
-  case token :: _ => Left(ParserErrorExpected(token.toString, List(s"identifier")))
-  case _ => Left(ParserErrorExpected("End of file", List(s"identifier")))
-}
-
-val parseIdenType = Parser {
-  case IdenToken(iden, range) :: rest => Right((rest, IdenTypeExpr(iden, range)))
-  case token :: _ => Left(ParserErrorExpected(token.toString, List(s"identifier")))
-  case _ => Left(ParserErrorExpected("End of file", List(s"identifier")))
-}
-
-lazy val parseTupleType: Parser[TypeExpr] = parseSymbol("(") <#> makeTupleType <*> parseTypeExpr.sepBy(parseSymbol(",")) <*> parseSymbol(")")
-
-lazy val parseMutType: Parser[TypeExpr] = parseKeyword("mut") <#> makeMutType <*> (parseTupleType <|> parseIdenType <|> parseRefType)
-
-lazy val parseRefType: Parser[TypeExpr] = parseSymbol("&") <#> makeRefType <*> (parseTupleType <|> parseIdenType <|> parseMutType)
-
-lazy val parseSingleFunType: Parser[TypeExpr] = (parseIdenType <|> parseRefType <|> parseMutType) <#> makeSingleFunType <*> (parseSymbol("=>") *> parseTypeExpr)
-
-lazy val parseMultiFunType: Parser[TypeExpr] = parseSymbol("(") <#> makeMultiFunType <*> parseTypeExpr.sepBy(parseSymbol(",")) <*> (parseSymbol("(") *> parseSymbol("=>") *> parseTypeExpr)
-
-lazy val parseTypeExpr: Parser[TypeExpr] = parseMultiFunType <|> parseTupleType <|> parseSingleFunType <|> parseIdenType <|> parseRefType <|> parseMutType
-
-def makeTupleType(startRange: FilePosRange)(elements: List[TypeExpr])(endRange: FilePosRange) = elements match {
-  case List() => UnitTypeExpr(startRange | endRange)
-  case List(element) => element
-  case _ => TupleTypeExpr(elements, startRange | endRange)
-}
-
-def makeMutType(startRange: FilePosRange)(typeExpr: TypeExpr) = MutTypeExpr(typeExpr, startRange | typeExpr.range)
-
-def makeRefType(startRange: FilePosRange)(typeExpr: TypeExpr) = RefTypeExpr(typeExpr, startRange | typeExpr.range)
-
-def makeSingleFunType(param: TypeExpr)(returnType: TypeExpr) = FunTypeExpr(List(param), returnType, param.range | returnType.range)
-
-def makeMultiFunType(startRange: FilePosRange)(params: List[TypeExpr])(returnType: TypeExpr) = FunTypeExpr(params, returnType, startRange | returnType.range)
-
-def testParsingLibrary() = {
-  val tokens = tokenize(File("src/main/scala/syn/TestFile"))
-  println(tokens.mkString(" "))
-  parseTypeExpr.t(tokens) match {
-    case Right((remainingTokens, typeExpr)) => println(typeExpr)
-    case Left(ParserErrorExpected(found, expected)) => println(s"Unexpected $found expected ${expected.toSet.mkString(", ")}")
+def testParsingLibrary(): Unit = {
+  val file = File("src/main/scala/syn/TestFile")
+  val tokens = tokenize(file)
+  parseExpr(0).t(tokens) match {
+    case Right((_, expr)) => println(expr.format(0))
+    case Left(ParserErrorExpected(found, range, expected)) => println(s"Unexpected $found at ${range.getOrElse(file.lastRange)} expected ${expected.toSet.mkString(", ")}")
+    case _ => ???
   }
 }

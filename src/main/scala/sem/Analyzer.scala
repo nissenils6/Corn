@@ -1,7 +1,6 @@
 package sem
 
 import core.*
-import gen.*
 import opt.{Ctrl, Data}
 
 import scala.collection.mutable

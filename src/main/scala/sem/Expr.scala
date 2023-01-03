@@ -1,7 +1,6 @@
 package sem
 
 import core.*
-import gen.*
 import syn.AssignExpr
 
 import scala.annotation.tailrec

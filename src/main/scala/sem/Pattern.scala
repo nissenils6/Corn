@@ -1,7 +1,6 @@
 package sem
 
 import core.*
-import gen.*
 
 abstract class Pattern[T <: Var] {
   def range: FilePosRange

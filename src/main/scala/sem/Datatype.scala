@@ -1,7 +1,6 @@
 package sem
 
 import core.*
-import gen.*
 
 import scala.annotation.targetName
 import scala.collection.mutable

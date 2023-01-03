@@ -65,7 +65,14 @@ case class MutExpr(expr: Expr, mutable: Boolean, range: FilePosRange, kwRange: F
 abstract class TypeExpr {
   def range: FilePosRange
 
-  def toString: String = ???
+  override def toString: String = this match {
+    case UnitTypeExpr(_) => "()"
+    case IdenTypeExpr(iden, _) => iden
+    case TupleTypeExpr(elements, _) => s"(${elements.mkString(", ")})"
+    case MutTypeExpr(typeExpr, _) => s"mut $typeExpr"
+    case RefTypeExpr(typeExpr, _) => s"@$typeExpr"
+    case FunTypeExpr(params, returnType, _) => s"(${params.mkString(", ")}) => $returnType"
+  }
 }
 
 case class UnitTypeExpr(range: FilePosRange) extends TypeExpr

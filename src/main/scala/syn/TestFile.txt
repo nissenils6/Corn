@@ -1,1 +1,1 @@
-mut (mut Int, String) // mut (Int, &(Char, &mut Bool)) => (Int, &String, &((Int, Bool), (), Char) => (String, Int))
+1 + 2 * 3 + 4

@@ -23,6 +23,18 @@ abstract class Token() {
     case StringToken(string, _) => s"\"${string.flatMap(unescapeChar)}\""
   }
 
+  def format: String = this match {
+    case IdenToken(iden, _) => s"identifier '$iden'"
+
+    case SymbolToken(symbol, _) => s"symbol '$symbol'"
+    case KeywordToken(keyword, _) => s"keyword '$keyword'"
+
+    case IntToken(int, _) => s"integer literal '$int'"
+    case FloatToken(float, _) => s"floating point literal '$float'"
+    case CharToken(char, _) => s"character literal '${unescapeChar(char)}'"
+    case StringToken(string, _) => s"""string literal "${string.flatMap(unescapeChar)}""""
+  }
+
   def isSymbol(symbol: String): Boolean = this match {
     case SymbolToken(sym, _) if symbol == sym => true
     case _ => false
@@ -54,7 +66,7 @@ private val idenSymbols = "+-*/%<>=!&|^~?:".toSet
 private val escapedChars = Map('t' -> '\t', 'b' -> '\b', 'n' -> '\n', 'r' -> '\r', '\'' -> '\'', '"' -> '"', '\\' -> '\\')
 private val escapedCharsInverted = escapedChars.map(_.swap)
 private val symbols = Set(":", "::", "...", "=>", "=")
-private val specialSymbols = "()[]{}.,;".toSet
+private val specialSymbols = "()[]{}.,;@".toSet
 private val keywords = Set("let", "fn", "if", "then", "else", "while", "true", "false", "const", "mut", "val", "ref")
 
 def unescapeChar(char: Char): String = if (escapedCharsInverted.contains(char)) {
