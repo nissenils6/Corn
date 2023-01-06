@@ -325,7 +325,7 @@ def overload(vars: List[Var], funRange: FilePosRange, args: List[Expr]): Option[
   }
 
   vars.map(fit).filter(_.nonEmpty).map(_.get) match {
-    case List() => None
+    case Nil => None
     case List(single) => Some(single)
     case varList => throw Error(Error.SEMANTIC, funRange.file, ErrorComponent(funRange, Some("Multiple matches for overloaded reference")) :: varList.map { (globalVar, _) => ErrorComponent(globalVar.range, Some("One match")) }, Some("Ambiguous reference"))
   }
@@ -407,21 +407,21 @@ class ExprConstEvalContext(val module: Module) {
 }
 
 def analyzeExpr(ctx: ExprParsingContext)(expr: syn.Expr): Expr = expr match {
-  case syn.CallExpr(syn.IdenExpr(iden, funRange), posArgs, range) =>
+  case syn.CallExpr(syn.IdenExpr(iden, funRange), args, range) =>
     val overloadLayers = ctx.lookupOverload(iden)
-    val analyzedPosArgs = posArgs.map(analyzeExpr(ctx))
-    val appliedLayers = overloadLayers.map(overload(_, funRange, analyzedPosArgs))
+    val analyzedArgs = args.map(analyzeExpr(ctx))
+    val appliedLayers = overloadLayers.map(overload(_, funRange, analyzedArgs))
     appliedLayers.find(_.nonEmpty).flatten match {
       case Some((globalVar: GlobalVar, args)) => CallExpr(GlobalVarExpr(globalVar, ctx.module, funRange), args, ctx.module, range)
       case Some((localVar: LocalVar, args)) => CallExpr(LocalVarExpr(localVar, ctx.module, funRange), args, ctx.module, range)
       case _ => throw Error.internal(funRange)
     }
-  case syn.CallExpr(function, posArgs, range) =>
+  case syn.CallExpr(function, args, range) =>
     val analyzedFunExpr = analyzeExpr(ctx)(function)
     analyzedFunExpr.returnType match {
       case FunDatatype(params, _, _) =>
-        if (params.length != posArgs.length) throw Error.internal(range.file)
-        val analyzedArgs = posArgs.map(analyzeExpr(ctx))
+        if (params.length != args.length) throw Error.internal(range.file)
+        val analyzedArgs = args.map(analyzeExpr(ctx))
         if (!params.zip(analyzedArgs.map(_.returnType)).forall(t => t._1 == t._2)) throw Error.internal(range)
         CallExpr(analyzedFunExpr, analyzedArgs, ctx.module, range)
       case datatype => throw Error.semantic(s"'$datatype' is not callable", function.range)

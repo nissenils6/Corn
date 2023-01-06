@@ -282,7 +282,7 @@ abstract class Op {
           case _ => ()
         }
         context.data(Data(this)) = (Some(asm.Loc(local)), tupleType)
-      case AddInt(List(a, b), List()) =>
+      case AddInt(List(a, b), Nil) =>
         val result = asm.Reg(context.reg())
         context.data(Data(this)) = (Some(result), IntDatatype)
         context.instrs.append(asm.Add(result, context.src(a), context.src(b)))

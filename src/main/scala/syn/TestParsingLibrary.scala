@@ -3,27 +3,55 @@ package syn
 import core.*
 import lex.*
 
-import scala.collection.mutable
 import scala.annotation.targetName
-import scala.compiletime.ops.{int, string}
+import scala.collection.mutable
 
 abstract class ParserError {
   @targetName("combine")
   def |(e: ParserError): ParserError = (this, e) match {
     case (ParserErrorExpected(_, _, expected1), ParserErrorExpected(found, range, expected2)) => ParserErrorExpected(found, range, expected1.concat(expected2))
+    case (ParserErrorEmpty, parserError) => parserError
+    case (parserError, ParserErrorEmpty) => parserError
   }
 }
 
 case class ParserErrorExpected(found: String, range: Option[FilePosRange], expected: List[String]) extends ParserError
 
+case object ParserErrorEmpty extends ParserError
+
+case class ParserWithFilter[R](self: Parser[R], p: R => Boolean) {
+  def map[R2](f: R => R2): Parser[R2] = self.filter(p).map(f)
+  def flatMap[R2](f: R => Parser[R2]): Parser[R2] = self.filter(p).flatMap(f)
+  def withFilter(q: R => Boolean): ParserWithFilter[R] = ParserWithFilter[R](self, a => p(a) && q(a))
+}
+
 case class Parser[+R](t: List[Token] => Either[ParserError, (List[Token], R)]) {
   @inline
-  @targetName("map")
-  def <#>[R2](f: R => R2): Parser[R2] = Parser { s =>
+  def map[R2](f: R => R2): Parser[R2] = Parser { s =>
     t(s).map { case (ns, r) =>
       (ns, f(r))
     }
   }
+
+  @inline
+  def flatMap[R2](f: R => Parser[R2]): Parser[R2] = Parser { s =>
+    t(s).flatMap { case (ns, r) =>
+      f(r).t(ns)
+    }
+  }
+
+  @inline
+  def filter(f: R => Boolean): Parser[R] = Parser { s =>
+    t(s) match {
+      case Right((ns, r)) if f(r) => Right((ns, r))
+      case Right(_) => Left(ParserErrorEmpty)
+      case Left(e) => Left(e)
+    }
+  }
+
+  @inline
+  @targetName("inject")
+  def <#>[R2](f: R => R2): Parser[R2] = map(f)
 
   @inline
   @targetName("sequenceLeft")
@@ -45,6 +73,7 @@ case class Parser[+R](t: List[Token] => Either[ParserError, (List[Token], R)]) {
     }
   }
 
+  @inline
   def opt: Parser[Option[R]] = Parser { s =>
     t(s) match {
       case Right((ns, result)) => Right((ns, Some(result)))
@@ -52,6 +81,7 @@ case class Parser[+R](t: List[Token] => Either[ParserError, (List[Token], R)]) {
     }
   }
 
+  @inline
   def many: Parser[List[R]] = Parser { s =>
     var cs = s
     var list: List[R] = List.empty
@@ -68,6 +98,7 @@ case class Parser[+R](t: List[Token] => Either[ParserError, (List[Token], R)]) {
     Right((cs, list.reverse))
   }
 
+  @inline
   def some: Parser[List[R]] = Parser { s =>
     t(s) match {
       case Right((ns, result)) =>
@@ -88,6 +119,7 @@ case class Parser[+R](t: List[Token] => Either[ParserError, (List[Token], R)]) {
     }
   }
 
+  @inline
   def sepBy(p: Parser[Any]): Parser[List[R]] = Parser { s =>
     t(s) match {
       case Right((ns, result)) =>
@@ -109,20 +141,41 @@ case class Parser[+R](t: List[Token] => Either[ParserError, (List[Token], R)]) {
           }
         }
         error.toLeft((cs, list.reverse))
-      case Left(e) => Right((s, List()))
+      case Left(_) => Right((s, List.empty))
     }
   }
-  
-  def filter(f: R => Boolean, e: R => ParserError) = Parser { s =>
+
+  @inline
+  def sepBy1[T](p: Parser[T]): Parser[(List[R], List[T])] = Parser { s =>
     t(s) match {
-      case Right((ns, r)) if f(r) => Right((ns, r))
-      case Right((_, r)) => Left(e(r))
+      case Right((ns, result)) =>
+        var cs = ns
+        var list: List[R] = List(result)
+        var sepList: List[T] = List.empty
+        var error: Option[ParserError] = None
+        var exit = false
+        while (!exit) {
+          p.t(cs) match {
+            case Right((ss, sepResult)) => t(ss) match {
+              case Right((ns, result)) =>
+                list = result :: list
+                sepList = sepResult :: sepList
+                cs = ns
+              case Left(e) =>
+                error = Some(e)
+                exit = true
+            }
+            case Left(_) => exit = true
+          }
+        }
+        error.toLeft((cs, (list.reverse, sepList.reverse)))
       case Left(e) => Left(e)
     }
   }
 }
 
 object Parser {
+  @inline
   def alternative[R](ps: List[() => Parser[R]]): Parser[R] = Parser { s =>
     val errors: mutable.Buffer[ParserError] = mutable.Buffer.empty
     var result: Option[(List[Token], R)] = None
@@ -136,11 +189,14 @@ object Parser {
           false
       }
     }
-    result.toRight(errors.foldRight(ParserErrorExpected("", None, List.empty) : ParserError)(_ | _))
+    result.toRight(errors.foldRight(ParserErrorExpected("", None, List.empty): ParserError)(_ | _))
   }
 }
 
 extension[R] (parser: => Parser[R]) {
+  @inline
+  def withFilter(p: R => Boolean): ParserWithFilter[R] = ParserWithFilter(parser, p)
+
   @inline
   @targetName("alternative")
   def <|>[R2 >: R, R1 <: R2](p: => Parser[R1]): Parser[R2] = Parser { s =>
@@ -184,10 +240,20 @@ val parseIden: Parser[(FilePosRange, String)] = Parser {
   case _ => Left(ParserErrorExpected("End of file", None, List(s"identifier")))
 }
 
+def time[T](expr: => T): (T, Long) = {
+  val start = System.nanoTime
+  val value = expr
+  (value, System.nanoTime - start)
+}
+
+def formatTime(nanos: Long): String = s"${Math.round(nanos / 1e5) / 10} ms"
+
 def testParsingLibrary(): Unit = {
   val file = File("src/main/scala/syn/TestFile")
   val tokens = tokenize(file)
-  parseExpr(0).t(tokens) match {
+  val (parsed, parseTime) = time(parseIdenOperator.t(tokens))
+  println(formatTime(parseTime))
+  parsed match {
     case Right((_, expr)) => println(expr.format(0))
     case Left(ParserErrorExpected(found, range, expected)) => println(s"Unexpected $found at ${range.getOrElse(file.lastRange)} expected ${expected.toSet.mkString(", ")}")
     case _ => ???

@@ -65,7 +65,7 @@ case class StringToken(string: String, range: FilePosRange) extends Token
 private val idenSymbols = "+-*/%<>=!&|^~?:".toSet
 private val escapedChars = Map('t' -> '\t', 'b' -> '\b', 'n' -> '\n', 'r' -> '\r', '\'' -> '\'', '"' -> '"', '\\' -> '\\')
 private val escapedCharsInverted = escapedChars.map(_.swap)
-private val symbols = Set(":", "::", "...", "=>", "=")
+private val symbols = Set(":", "=>", "=")
 private val specialSymbols = "()[]{}.,;@".toSet
 private val keywords = Set("let", "fn", "if", "then", "else", "while", "true", "false", "const", "mut", "val", "ref")
 
@@ -130,7 +130,7 @@ def tokenize(file: File): List[Token] = {
 
   @tailrec
   def lex(state: LexerState, chars: List[(Char, Int)], tokens: List[Token], errors: List[ErrorComponent]): (List[Token], List[ErrorComponent]) = (state, chars) match {
-    case (BlankState, List()) => (tokens, errors)
+    case (BlankState, Nil) => (tokens, errors)
     case (BlankState, (WhitespaceChar(_), _) :: rest) => lex(state, rest, tokens, errors)
 
     case (BlankState, ('/', _) :: ('/', _) :: rest) => lex(CommentState(false), rest, tokens, errors)
@@ -139,7 +139,7 @@ def tokenize(file: File): List[Token] = {
     case (CommentState(false), ('\n', _) :: rest) => lex(BlankState, rest, tokens, errors)
     case (CommentState(true), ('*', _) :: ('/', _) :: rest) => lex(BlankState, rest, tokens, errors)
     case (CommentState(isBlock), (_, _) :: rest) => lex(CommentState(isBlock), rest, tokens, errors)
-    case (CommentState(false), List()) => (tokens, errors)
+    case (CommentState(false), Nil) => (tokens, errors)
 
     case (BlankState, (SymChar(char), Range(range)) :: rest) => lex(BlankState, rest, SymbolToken(char.toString, range) :: tokens, errors)
     case (BlankState, ('-', Range(start)) :: (NumberStartChar(char), _) :: rest) => lex(NumberState(List(char, '-'), start), rest, tokens, errors)
@@ -171,7 +171,7 @@ def tokenize(file: File): List[Token] = {
     case (StringState(isChar, string, range), ('\\', _) :: (EscapedChar(char), _) :: rest) => lex(StringState(isChar, char :: string, range), rest, tokens, errors)
     case (StringState(isChar, string, range), ('\\', _) :: (char, Range(charRange)) :: rest) => lex(StringState(isChar, char :: string, range), rest, tokens, ErrorComponent(charRange, Some(s"Inescapable character '$char'")) :: errors)
     case (StringState(isChar, string, range), (char, _) :: rest) => lex(StringState(isChar, char :: string, range), rest, tokens, errors)
-    case (StringState(isChar, _, range), List()) => (tokens, ErrorComponent(range.after, Some(s"Unexpected end of file while parsing ${if isChar then "character" else "string"} literal")) :: errors)
+    case (StringState(isChar, _, range), Nil) => (tokens, ErrorComponent(range.after, Some(s"Unexpected end of file while parsing ${if isChar then "character" else "string"} literal")) :: errors)
   }
 
   val (tokens, errors) = lex(BlankState, file.source.toList.zipWithIndex, List.empty, List.empty)

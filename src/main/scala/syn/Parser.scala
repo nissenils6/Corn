@@ -25,7 +25,8 @@ abstract class Expr {
   def range: FilePosRange
 
   def format(indentation: Int): String = this match {
-    case CallExpr(fun, posArgs, _) => s"${fun.format(indentation)}(${posArgs.map(_.format(indentation)).mkString(", ")})"
+    case CallExpr(fun, List(a, b), _) => s"(${a.format(indentation)} ${fun.format(indentation)} ${b.format(indentation)})"
+    case CallExpr(fun, args, _) => s"${fun.format(indentation)}(${args.map(_.format(indentation)).mkString(", ")})"
     case IdenExpr(iden, _) => iden
     case RefExpr(expr, _) => s"ref ${expr.format(indentation)}"
     case ValExpr(expr, _) => s"val ${expr.format(indentation)}"
@@ -44,7 +45,7 @@ abstract class Expr {
   }
 }
 
-case class CallExpr(function: Expr, posArgs: List[Expr], range: FilePosRange) extends Expr
+case class CallExpr(function: Expr, args: List[Expr], range: FilePosRange) extends Expr
 case class IdenExpr(iden: String, range: FilePosRange) extends Expr
 case class RefExpr(expr: Expr, range: FilePosRange) extends Expr
 case class ValExpr(expr: Expr, range: FilePosRange) extends Expr
@@ -61,6 +62,15 @@ case class FunctionTypeExpr(parameters: List[Expr], returnType: Expr, range: Fil
 case class IfExpr(condition: Expr, ifBlock: Expr, elseBlock: Expr, range: FilePosRange) extends Expr
 case class WhileExpr(condition: Expr, ifBlock: Expr, range: FilePosRange) extends Expr
 case class MutExpr(expr: Expr, mutable: Boolean, range: FilePosRange, kwRange: FilePosRange) extends Expr
+
+abstract class Stmt {
+  
+}
+
+case class ExprStmt(expr: Expr) extends Stmt
+case class AssignVarStmt(iden: String, expr: Expr) extends Stmt
+case class AssignRefStmt(refExpr: Expr, expr: Expr) extends Stmt
+case class DeclareStmt(pattern: Pattern, expr: Expr) extends Stmt
 
 abstract class TypeExpr {
   def range: FilePosRange
@@ -153,7 +163,7 @@ private def parseExpr(precedence: Int)(state: ParserState): (Expr, ParserState) 
         val (returnTypeExpr, lastState) = parseExpr(0)(newState withTokens returnTypeTokens)
         (FunctionTypeExpr(exprs, returnTypeExpr, startRange | returnTypeExpr.range), lastState)
       case _ => parseExprAfter(precedence)(exprs match {
-        case List() => UnitExpr(startRange | endRange)
+        case Nil => UnitExpr(startRange | endRange)
         case List(expr) => expr
         case exprList => TupleExpr(exprList, startRange | endRange)
       }, newState)
@@ -221,7 +231,7 @@ private def parsePattern(state: ParserState): (Pattern, ParserState) = state.tok
   case SymbolToken("(", startRange) :: rest =>
     val (patterns, newState, endRange) = parseSep(state withTokens rest, parsePattern, ",", ")", "pattern")
     patterns match {
-      case List() => throw Error.internal(startRange | endRange)
+      case Nil => throw Error.internal(startRange | endRange)
       case List(pattern) => (pattern, newState)
       case patterns => (TuplePattern(patterns, startRange | endRange), newState)
     }

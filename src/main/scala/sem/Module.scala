@@ -241,7 +241,7 @@ class Module(val file: File, fileContent: => (Map[String, List[GlobalVar]], List
     }
 
     opt.OptUnit(vars("main").find(_.datatype match {
-      case FunDatatype(List(), UnitDatatype(_), _) => true
+      case FunDatatype(Nil, UnitDatatype(_), _) => true
       case _ => false
     }) match {
       case Some(globalVar: GlobalVar) => globalVar.constVal match {

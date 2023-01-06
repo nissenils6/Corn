@@ -69,7 +69,7 @@ object ParsedArgs {
 }
 
 def parseArgs(args: List[(FilePosRange, String)], parsedArgs: ParsedArgs): ParsedArgs = args match {
-  case List() => parsedArgs
+  case Nil => parsedArgs
   case (_, "-file") :: (_, filePath) :: rest => parseArgs(rest, ParsedArgs(Some(filePath), parsedArgs.options))
   case (range, "-file") :: _ => throw Error.cmdLine(s"Unexpected end of line when parsing input file", range.file.lastRange)
   case (_, option) :: rest if ParsedArgs.OPTIONS.contains(option) => parseArgs(rest, ParsedArgs(parsedArgs.filePath, parsedArgs.options | ParsedArgs.OPTIONS(option)))
