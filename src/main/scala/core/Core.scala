@@ -91,7 +91,8 @@ class File(val name: String, val source: String) {
     case array => Array(-1).concat(array).concat(Array(source.length))
   }
 
-  def lastRange: FilePosRange = FilePosRange(source.length, source.length + 1, this)
+  val range: FilePosRange = FilePosRange(0, source.length, this)
+  val lastRange: FilePosRange = range.after
 }
 
 object File {

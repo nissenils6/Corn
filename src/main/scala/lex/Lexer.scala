@@ -4,10 +4,6 @@ import core.*
 
 import scala.annotation.tailrec
 
-val MAX_PRECEDENCE = 11
-val FUN_TYPE_LIT_PRECEDENCE = 1
-val ASSIGNMENT_PRECEDENCE = 0
-
 abstract class Token() {
   def range: FilePosRange
 
@@ -34,26 +30,9 @@ abstract class Token() {
     case CharToken(char, _) => s"character literal '${unescapeChar(char)}'"
     case StringToken(string, _) => s"""string literal "${string.flatMap(unescapeChar)}""""
   }
-
-  def isSymbol(symbol: String): Boolean = this match {
-    case SymbolToken(sym, _) if symbol == sym => true
-    case _ => false
-  }
 }
 
-case class IdenToken(iden: String, range: FilePosRange) extends Token {
-  val precedence: Int = if (idenSymbols.contains(iden.head)) {
-    iden match {
-      case "*" | "/" | "%" => 10
-      case "+" | "-" => 9
-      case ">>" | "<<" => 8
-      case ">" | "<" | ">=" | "<=" => 7
-      case "==" | "!=" => 6
-      case "|" | "&" | "^" => 5
-      case _ => 4
-    }
-  } else 3
-}
+case class IdenToken(iden: String, range: FilePosRange) extends Token
 
 case class SymbolToken(symbol: String, range: FilePosRange) extends Token
 case class KeywordToken(keyword: String, range: FilePosRange) extends Token
@@ -62,12 +41,12 @@ case class FloatToken(float: Double, range: FilePosRange) extends Token
 case class CharToken(char: Char, range: FilePosRange) extends Token
 case class StringToken(string: String, range: FilePosRange) extends Token
 
-private val idenSymbols = "+-*/%<>=!&|^~?:".toSet
+private val idenSymbols = "+-*/%<>=&|^~?:".toSet
 private val escapedChars = Map('t' -> '\t', 'b' -> '\b', 'n' -> '\n', 'r' -> '\r', '\'' -> '\'', '"' -> '"', '\\' -> '\\')
 private val escapedCharsInverted = escapedChars.map(_.swap)
-private val symbols = Set(":", "=>", "=")
-private val specialSymbols = "()[]{}.,;@".toSet
-private val keywords = Set("let", "fn", "if", "then", "else", "while", "true", "false", "const", "mut", "val", "ref")
+private val symbols = Set(":", "=>", "=", "|>", ":=", "::")
+private val specialSymbols = "()[]{}.,;@!".toSet
+private val keywords = Set("if", "then", "else", "while", "true", "false", "mut")
 
 def unescapeChar(char: Char): String = if (escapedCharsInverted.contains(char)) {
   "\\" + escapedCharsInverted(char)

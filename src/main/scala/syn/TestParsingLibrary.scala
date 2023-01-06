@@ -146,7 +146,7 @@ case class Parser[+R](t: List[Token] => Either[ParserError, (List[Token], R)]) {
   }
 
   @inline
-  def sepBy1[T](p: Parser[T]): Parser[(List[R], List[T])] = Parser { s =>
+  def sepByC[T](p: Parser[T]): Parser[(List[R], List[T])] = Parser { s =>
     t(s) match {
       case Right((ns, result)) =>
         var cs = ns
@@ -240,22 +240,21 @@ val parseIden: Parser[(FilePosRange, String)] = Parser {
   case _ => Left(ParserErrorExpected("End of file", None, List(s"identifier")))
 }
 
-def time[T](expr: => T): (T, Long) = {
-  val start = System.nanoTime
-  val value = expr
-  (value, System.nanoTime - start)
+def parseIden(p: String => Boolean): Parser[(FilePosRange, String)] = for {
+  (range, iden) <- parseIden
+  if p(iden)
+} yield (range, iden)
+
+def joinExpectedList(list: List[String]): String = list match {
+  case Nil => ""
+  case List(a) => a
+  case List(a, b) => s"$a or $b"
+  case a :: rest => s"$a, ${joinExpectedList(rest)}"
 }
 
-def formatTime(nanos: Long): String = s"${Math.round(nanos / 1e5) / 10} ms"
-
-def testParsingLibrary(): Unit = {
-  val file = File("src/main/scala/syn/TestFile")
-  val tokens = tokenize(file)
-  val (parsed, parseTime) = time(parseIdenOperator.t(tokens))
-  println(formatTime(parseTime))
-  parsed match {
-    case Right((_, expr)) => println(expr.format(0))
-    case Left(ParserErrorExpected(found, range, expected)) => println(s"Unexpected $found at ${range.getOrElse(file.lastRange)} expected ${expected.toSet.mkString(", ")}")
-    case _ => ???
-  }
+def parseFile(tokens: List[Token], file: File): List[GlobalStmt] = parseGlobalStmts.t(tokens) match {
+  case Right((Nil, globalStmts)) => globalStmts
+  case Right((token :: _, _)) => throw Error.syntax(s"Could not parse ${token.format}", token.range)
+  case Left(ParserErrorExpected(found, range, expected)) => throw Error.syntax(s"Unexpected $found expected ${joinExpectedList(expected)}", range.getOrElse(file.lastRange))
+  case Left(ParserErrorEmpty) => throw Error.syntax("Syntax error but I have no clue where it happened, sorry", file.lastRange)
 }

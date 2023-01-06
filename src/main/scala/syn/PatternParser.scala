@@ -3,14 +3,14 @@ package syn
 import core.*
 import lex.*
 
-val parseVarPattern: Parser[Pattern] = for {
+val parseVarPattern: Parser[Pattern[AnyVar]] = for {
   (range, iden) <- parseIden
-  _ <- (parseSymbol(":") *> parseType).opt
-} yield VarPattern(iden, None /*typeExpr*/ , range)
+  typeExpr <- (parseSymbol(":") *> parseType).opt
+} yield VarPattern(iden, typeExpr, range)
 
-lazy val parseParenPattern: Parser[Pattern] = for {
+lazy val parseParenPattern: Parser[Pattern[AnyVar]] = for {
   startRange <- parseSymbol("(")
-  elements <- parsePattern1.sepBy(parseSymbol(","))
+  elements <- parsePattern.sepBy(parseSymbol(","))
   endRange <- parseSymbol(")")
 } yield elements match {
   case Nil => assert(false, "Unit patterns not supported yet")
@@ -18,4 +18,4 @@ lazy val parseParenPattern: Parser[Pattern] = for {
   case _ => TuplePattern(elements, startRange | endRange)
 }
 
-lazy val parsePattern1: Parser[Pattern] = parseVarPattern <|> parseParenPattern
+lazy val parsePattern: Parser[Pattern[AnyVar]] = parseVarPattern <|> parseParenPattern

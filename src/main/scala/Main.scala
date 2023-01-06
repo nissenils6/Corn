@@ -25,6 +25,29 @@ Options:
 
 All generated files are named after the input file name, but have different suffixes.""".replace("\r\n", "\n")
 
+val compilerErrorStrings: Array[String] = Array(
+  "Another compiler error? I've had enough of these statically typed languages, let's just rewrite my code in python...",
+  "Damn it! I just can't seem to figure this one out, perhaps I should get some sleep and try again tomorrow...",
+  "Lol! Imagine getting a compiler error, cringe.",
+  "More compiler errors? At least I'm free of null pointer exceptions at runtime...",
+  "Another day, another compiler error.",
+  "Please! No more compiler errors, I'm so tired of strong type systems.",
+  "This error can't possibly be my fault, everything in my code is flawless. It must be the compiler that's wrong this time...",
+  "Ugh, yet another error from the finicky compiler... the modern languages insert random type conversion whenever needed to make sure the types line up. Why can't this language do that as well?",
+  "At this point, I think the compiler is just pranking me. \"Safe language\" my ass.",
+  "Phew! This error could've costed me millions if pushed to production. All hours spent trying to satisfy the compiler is really starting to pay off!",
+  "Help! My brain is melting. Right now I'm just making random changes until the compiler doesn't complain anymore.",
+  "Tired of compiler errors? Fear no more! I've got something for you: Javascript is the next generation programming language. " +
+    "Not only is it free of compiler errors, runtime errors are delayed by having erroneous expressions evaluate to 'undefined' instead which propagate through your code. " +
+    "Ignore them and call it a day, your co-worker will eventually find out about them, and hopefully fix them, after painfully tracking 'undefined' values throughout the entire codebase.",
+  "Who invented the concept of errors? What is the purpose even? Ahh...",
+  "The compiler is only here to help! Take advantage of it.",
+  "If a programming language was designed to have the entropy of source code equal to the size of the source code. In other words, compressed to the theoretical maximum, all encoding space utilized. " +
+    "Then it would be impossible for that language to have compiler errors, or even error at all, since each combination of characters as source code input would correspond to exactly one semantically unique and valid program. " +
+    "What a wonderful language that must be! (Fizz-buzz in that language: \"#h/N]c?'L.%%^!dbP`=\") If you typed something, in your opinion, incorrect, then you would still have a valid program, just a different one.",
+  "Dude! You're making so many silly errors, even ChatGPT can do better!"
+)
+
 def time[T](expr: => T): (T, Long) = {
   val start = System.nanoTime
   val value = expr
@@ -77,7 +100,7 @@ def parseArgs(args: List[(FilePosRange, String)], parsedArgs: ParsedArgs): Parse
 }
 
 @main def main(args: String*): Unit = try {
-  return syn.testParsingLibrary()
+//  return syn.testParsingLibrary()
 
   val cmdFile = File("Command Line", args.map {
     case arg if arg.contains(' ') => s"'$arg'"
