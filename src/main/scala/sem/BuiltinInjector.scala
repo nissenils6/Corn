@@ -16,7 +16,7 @@ private val bool = BoolDatatype(false)
 
 private def injectType(module: Module, name: String, datatype: Datatype): Unit = {
   val typeVar = TypeVar(name)
-  typeVar.value = datatype
+  typeVar.value = Some(datatype)
   module.types(name) = typeVar
 }
 
@@ -37,8 +37,8 @@ def injectCompOp(module: Module, name: String, eval: List[ConstVal] => ConstVal,
 }
 
 def injectPrintln(module: Module): Unit = {
-  val op = opt.Print(Data(None, 0))
-  op.next = opt.Ret(List(Data(op)))
+  val op = opt.Print(opt.Data(None, 0))
+  op.next = opt.Ret(List(opt.Data(op)))
   val optFun = Some(new opt.Fun(op, opt.FunDatatype(List(opt.IntDatatype), List(opt.UnitDatatype)), List()))
   module("println") = BuiltinFunExpr(List(int), int, None, optFun, module.file.lastRange)
 }

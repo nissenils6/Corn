@@ -252,9 +252,9 @@ def joinExpectedList(list: List[String]): String = list match {
   case a :: rest => s"$a, ${joinExpectedList(rest)}"
 }
 
-def parseFile(tokens: List[Token], file: File): List[GlobalStmt] = parseGlobalStmts.t(tokens) match {
-  case Right((Nil, globalStmts)) => globalStmts
-  case Right((token :: _, _)) => throw Error.syntax(s"Could not parse ${token.format}", token.range)
-  case Left(ParserErrorExpected(found, range, expected)) => throw Error.syntax(s"Unexpected $found expected ${joinExpectedList(expected)}", range.getOrElse(file.lastRange))
-  case Left(ParserErrorEmpty) => throw Error.syntax("Syntax error but I have no clue where it happened, sorry", file.lastRange)
+def parseFile(tokens: List[Token], file: File): Either[Error, Module] = parseGlobalStmts.t(tokens) match {
+  case Right((Nil, globalStmts)) => Right(Module(globalStmts, file))
+  case Right((token :: _, _)) => Left(Error.syntax(s"Could not parse ${token.format}", token.range))
+  case Left(ParserErrorExpected(found, range, expected)) => Left(Error.syntax(s"Unexpected $found expected ${joinExpectedList(expected)}", range.getOrElse(file.lastRange)))
+  case Left(ParserErrorEmpty) => Left(Error.syntax("Syntax error but I have no clue where it happened, sorry", file.lastRange))
 }

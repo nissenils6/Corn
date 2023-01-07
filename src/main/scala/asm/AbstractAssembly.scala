@@ -671,5 +671,5 @@ def assembleX64WindowsWithLinearScan(program: Program): String = {
     functionLabelAsm + frameAllocAsm + preserveRegsAsm + functionAsm
   }.mkString("\n")
 
-  slurpFile("src/main/scala/asm/CornRuntime.asm").replace(";#[ENTRY]", s"F${program.entryFun}").replace(";#[CODE]", functionsAsm).replace(";#[DATA]", "")
+  slurpFile("src/main/scala/asm/CornRuntime.asm").get.replace(";#[ENTRY]", s"F${program.entryFun}").replace(";#[CODE]", functionsAsm).replace(";#[DATA]", "")
 }

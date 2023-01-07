@@ -1,9 +1,7 @@
 package sem
 
 import core.*
-import opt.{Ctrl, Data}
-
-import scala.collection.mutable
+import syn.*
 
 //type BinGraphOp = (opt.Data, opt.Data) => opt.OpNext
 //type CompGraphOp = opt.Data => opt.OpNext

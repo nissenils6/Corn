@@ -25,7 +25,7 @@ case class ErrorComponent(range: FilePosRange, message: Option[String] = None) {
 }
 
 abstract class CompilerError extends Exception {
-  
+
 }
 
 case class Error(errorType: String, file: File, components: List[ErrorComponent], message: Option[String] = None) extends CompilerError {
@@ -42,6 +42,7 @@ object Error {
   val SYNTAX = "Syntax"
   val SEMANTIC = "Semantic"
   val INTERNAL = "Internal"
+  val EXIT = "Exit"
 
   def cmdLine(message: String, range: FilePosRange): Error =
     Error(CMD_LINE, range.file, List(ErrorComponent(range, Some(message))))
@@ -64,14 +65,8 @@ object Error {
   def internal(message: String, range: FilePosRange): Error =
     Error(INTERNAL, range.file, List(ErrorComponent(range, Some(message))))
 
-  def unexpected(expr: Expr, expected: String): Error =
-    Error(SYNTAX, expr.range.file, List(ErrorComponent(expr.range, Some(s"Unexpected expression, expected '$expected'"))))
-
-  def unexpected(token: Token, expected: String): Error =
-    Error(SYNTAX, token.range.file, List(ErrorComponent(token.range, Some(s"Unexpected token '$token', expected '$expected'"))))
-
-  def unexpected(expected: String, file: File): Error =
-    Error(SYNTAX, file, List(ErrorComponent(file.lastRange, Some(s"Unexpected end of file, expected '$expected'"))))
+  def exit(cmdLine: File): Error =
+    Error(EXIT, cmdLine, List.empty, None)
 
   def typeMismatch(datatype: Datatype, expectedDatatype: Datatype, range: FilePosRange, patternRange: FilePosRange): Error =
     Error(SEMANTIC, range.file, List(
@@ -98,7 +93,9 @@ class File(val name: String, val source: String) {
 object File {
   def apply(name: String, source: String): File = new File(name, source)
 
-  def apply(filePath: String): File = new File(filePath.split('/').last, slurpFile(filePath + ".txt"))
+  def apply(filePath: String): Either[Throwable, File] = for {
+    source <- slurpFile(filePath + ".txt")
+  } yield new File(filePath.split('/').last, source)
 }
 
 case class FilePosRange(start: Int, end: Int, file: File) {
@@ -140,5 +137,5 @@ case class FilePosRange(start: Int, end: Int, file: File) {
   }
 }
 
-def slurpFile(filePath: String): String = Using(io.Source.fromFile(filePath))(_.mkString).get
+def slurpFile(filePath: String): Either[Throwable, String] = Using(io.Source.fromFile(filePath))(_.mkString).toEither
 def printFile(filePath: String, content: String): Unit = Using(new PrintWriter(filePath))(_.write(content))

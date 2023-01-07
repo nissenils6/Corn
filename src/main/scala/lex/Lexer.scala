@@ -102,7 +102,7 @@ object KeywordString {
   def unapply(string: String): Option[String] = Some(string).filter(keywords.contains)
 }
 
-def tokenize(file: File): List[Token] = {
+def tokenizeFile(file: File): Either[Error, List[Token]] = {
   object Range {
     def unapply(int: Int): Option[FilePosRange] = Some(FilePosRange(int, int + 1, file))
   }
@@ -154,6 +154,9 @@ def tokenize(file: File): List[Token] = {
   }
 
   val (tokens, errors) = lex(BlankState, file.source.toList.zipWithIndex, List.empty, List.empty)
-  if (errors.nonEmpty) throw Error(Error.LEXICAL, file, errors.reverse)
-  tokens.reverse
+  if (errors.nonEmpty) {
+    Left(Error(Error.LEXICAL, file, errors.reverse))
+  } else {
+    Right(tokens.reverse)
+  }
 }

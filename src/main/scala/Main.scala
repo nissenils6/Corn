@@ -1,9 +1,9 @@
-import core.{CompilerError, Error, ErrorComponent, ErrorGroup, File, FilePosRange}
-import lex.{LexerState, tokenize}
-import sem.analyzeFile
-import syn.{GlobalStmt, ParserState, parseFile}
+import core.*
+import lex.*
+import sem.*
+import syn.*
 
-import core.printFile
+import scala.annotation.tailrec
 import scala.sys.process.{Process, ProcessLogger}
 
 // optimization, while loops, heap allocation, closures, partial application, structs, unions, generics, builtin datatypes, io, for comprehensions, match expressions
@@ -41,12 +41,14 @@ val compilerErrorStrings: Array[String] = Array(
     "Not only is it free of compiler errors, runtime errors are delayed by having erroneous expressions evaluate to 'undefined' instead which propagate through your code. " +
     "Ignore them and call it a day, your co-worker will eventually find out about them, and hopefully fix them, after painfully tracking 'undefined' values throughout the entire codebase.",
   "Who invented the concept of errors? What is the purpose even? Ahh...",
-  "The compiler is only here to help! Take advantage of it.",
-  "If a programming language was designed to have the entropy of source code equal to the size of the source code. In other words, compressed to the theoretical maximum, all encoding space utilized. " +
+  "Congratulations! You've got yourself yet another compiler error. Here is a random thought: " +
+    "If a programming language was designed to have the most information-dense grammar possible, or in other words, compressed to the theoretical maximum, with all encoding space utilized. " +
     "Then it would be impossible for that language to have compiler errors, or even error at all, since each combination of characters as source code input would correspond to exactly one semantically unique and valid program. " +
-    "What a wonderful language that must be! (Fizz-buzz in that language: \"#h/N]c?'L.%%^!dbP`=\") If you typed something, in your opinion, incorrect, then you would still have a valid program, just a different one.",
+    "What a wonderful language that must be! (Fizz-buzz in that language would probably look like: \"#h/N]c?'L.%%^!dbP`=\") If you typed something that is, in your opinion, incorrect, then you would still have a valid program, just a different one.",
   "Dude! You're making so many silly errors, even ChatGPT can do better!"
 )
+
+def randomCompilerErrorString: String = compilerErrorStrings((Math.random() * compilerErrorStrings.length).toInt)
 
 def time[T](expr: => T): (T, Long) = {
   val start = System.nanoTime
@@ -91,96 +93,105 @@ object ParsedArgs {
   val OPTIONS: Map[String, Int] = Map("-help" -> HELP, "-comp_info" -> COMP_INFO, "-run" -> RUN, "-tokens" -> TOKENS, "-ast" -> AST, "-dec_ast" -> DEC_AST, "-opt_graph" -> OPT_GRAPH, "-abs_asm" -> ABS_ASM)
 }
 
-def parseArgs(args: List[(FilePosRange, String)], parsedArgs: ParsedArgs): ParsedArgs = args match {
-  case Nil => parsedArgs
+@tailrec
+def parseArgs(args: List[(FilePosRange, String)], parsedArgs: ParsedArgs): Either[Error, ParsedArgs] = args match {
+  case Nil => Right(parsedArgs)
   case (_, "-file") :: (_, filePath) :: rest => parseArgs(rest, ParsedArgs(Some(filePath), parsedArgs.options))
-  case (range, "-file") :: _ => throw Error.cmdLine(s"Unexpected end of line when parsing input file", range.file.lastRange)
+  case (range, "-file") :: _ => Left(Error.cmdLine(s"Unexpected end of line when parsing input file", range.file.lastRange))
   case (_, option) :: rest if ParsedArgs.OPTIONS.contains(option) => parseArgs(rest, ParsedArgs(parsedArgs.filePath, parsedArgs.options | ParsedArgs.OPTIONS(option)))
-  case (range, cmd) :: _ => throw Error.cmdLine(s"Invalid command '$cmd'", range)
+  case (range, cmd) :: _ => Left(Error.cmdLine(s"Invalid command '$cmd'", range))
 }
 
-@main def main(args: String*): Unit = try {
-//  return syn.testParsingLibrary()
-
-  val cmdFile = File("Command Line", args.map {
+def processCmdLine(args: List[String]): Either[Error, (ParsedArgs, File)] = {
+  val cmdLine = File("Command Line", args.map {
     case arg if arg.contains(' ') => s"'$arg'"
     case arg => arg
   }.mkString(" "))
 
   val cmdArgs = args.foldLeft((0, List[(FilePosRange, String)]())) {
-    case ((pos, accArgs), arg) if arg.contains(' ') => (pos + arg.length + 3, (FilePosRange(pos + 1, pos + arg.length + 2, cmdFile), arg) :: accArgs)
-    case ((pos, accArgs), arg) => (pos + arg.length + 1, (FilePosRange(pos, pos + arg.length, cmdFile), arg) :: accArgs)
+    case ((pos, accArgs), arg) if arg.contains(' ') => (pos + arg.length + 3, (FilePosRange(pos + 1, pos + arg.length + 2, cmdLine), arg) :: accArgs)
+    case ((pos, accArgs), arg) => (pos + arg.length + 1, (FilePosRange(pos, pos + arg.length, cmdLine), arg) :: accArgs)
   }._2.reverse
 
-  val parsedArgs = parseArgs(cmdArgs, ParsedArgs())
+  parseArgs(cmdArgs, ParsedArgs()).map((_, cmdLine))
+}
 
+def processHelpFlag(parsedArgs: ParsedArgs, cmdLine: File): Either[Error, Unit] = {
   if (parsedArgs.enabled(ParsedArgs.HELP)) {
     println(window("HELP", help))
+    Left(Error.exit(cmdLine))
+  } else {
+    Right(())
   }
-
-  for {
-    filePath <- parsedArgs.filePath
-    file = File(filePath)
-    (tokens, lexTime) = time(tokenize(file))
-    (parsedFile, parseTime) = time(parseFile(tokens, file))
-    (module, semTime) = time(analyzeFile(parsedFile, file))
-    (optUnit, irTime) = time(module.generateIr())
-    (_, optTime) = time({
-      opt.globalVarInline(optUnit)
-      opt.funExprInline(optUnit)
-      opt.inlineFunctions(optUnit)
-      opt.localVarInline(optUnit)
-      opt.deadCodeElimination(optUnit)
-      opt.deadBlockElimination(optUnit)
-    })
-    (asmProgram, absAsmTime) = time({
-      val asmProgram = optUnit.generateAsm()
-      asm.purgeDeadCode(asmProgram)
-      asmProgram
-    })
-    (assembly, asmTime) = time(asm.assembleX64WindowsWithLinearScan(asmProgram))
-  } {
-    if (parsedArgs.enabled(ParsedArgs.COMP_INFO)) println(window("COMPILATION INFO", List(
-      s"Lexical Analysis runtime:                            ${formatTime(lexTime)}",
-      s"Syntax Analysis runtime:                             ${formatTime(parseTime)}",
-      s"Semantic Analysis runtime:                           ${formatTime(semTime)}",
-      s"Intermediate Representation Generation runtime:      ${formatTime(irTime)}",
-      s"Code Optimization runtime:                           ${formatTime(optTime)}",
-      s"Abstract Assembly Generation runtime:                ${formatTime(absAsmTime)}",
-      s"Register Allocation and Assembly Generation runtime: ${formatTime(asmTime)}"
-    ).mkString("\n")))
-
-    if (parsedArgs.enabled(ParsedArgs.TOKENS)) {
-      printFile(filePath + ".tokens.txt", tokens.mkString(" "))
-    }
-
-    if (parsedArgs.enabled(ParsedArgs.AST)) {
-      printFile(filePath + ".ast.txt", parsedFile.mkString("\n\n"))
-    }
-
-    if (parsedArgs.enabled(ParsedArgs.DEC_AST)) {
-      printFile(filePath + ".dec_ast.txt", module.format(0))
-    }
-
-    if (parsedArgs.enabled(ParsedArgs.OPT_GRAPH)) {
-      printFile(filePath + ".opt_graph.txt", optUnit.format())
-      Process(s"dot -Tsvg $filePath.opt_graph.txt -o $filePath.opt_graph.svg").!(ProcessLogger(_ => ()))
-    }
-
-    if (parsedArgs.enabled(ParsedArgs.ABS_ASM)) {
-      printFile(filePath + ".abs_asm.txt", asmProgram.toString)
-    }
-
-    printFile(filePath + ".asm", assembly)
-    Process(s"fasm $filePath.asm $filePath.exe").!(ProcessLogger(_ => ()))
-
-    if (parsedArgs.enabled(ParsedArgs.RUN)) {
-      Process(filePath).!
-    }
-  }
-} catch {
-  case error: CompilerError =>
-    error.printStackTrace()
-    print("\n" * 4)
-    print(window("COMPILER ERROR", error.toString))
 }
+
+// if (parsedArgs.enabled(ParsedArgs.HELP)) {
+//   println(window("HELP", help))
+// }
+//
+// opt.globalVarInline(optUnit)
+// opt.funExprInline(optUnit)
+// opt.inlineFunctions(optUnit)
+// opt.localVarInline(optUnit)
+// opt.deadCodeElimination(optUnit)
+// opt.deadBlockElimination(optUnit)
+// val asmProgram = optUnit.generateAsm()
+// asm.purgeDeadCode(asmProgram)
+// val assembly  = asm.assembleX64WindowsWithLinearScan(asmProgram)
+//
+// if (parsedArgs.enabled(ParsedArgs.COMP_INFO)) println(window("COMPILATION INFO", List(
+//   s"Lexical Analysis runtime:                            ${formatTime(0)}",
+//   s"Syntax Analysis runtime:                             ${formatTime(0)}",
+//   s"Semantic Analysis runtime:                           ${formatTime(0)}",
+//   s"Intermediate Representation Generation runtime:      ${formatTime(0)}",
+//   s"Code Optimization runtime:                           ${formatTime(0)}",
+//   s"Abstract Assembly Generation runtime:                ${formatTime(0)}",
+//   s"Register Allocation and Assembly Generation runtime: ${formatTime(0)}"
+// ).mkString("\n")))
+//
+// if (parsedArgs.enabled(ParsedArgs.TOKENS)) {
+//   printFile(filePath + ".tokens.txt", tokens.mkString(" "))
+// }
+//
+// if (parsedArgs.enabled(ParsedArgs.AST)) {
+//   printFile(filePath + ".ast.txt", parsedFile.mkString("\n\n"))
+// }
+//
+// if (parsedArgs.enabled(ParsedArgs.DEC_AST)) {
+//   printFile(filePath + ".dec_ast.txt", module.format(0))
+// }
+//
+// if (parsedArgs.enabled(ParsedArgs.OPT_GRAPH)) {
+//   printFile(filePath + ".opt_graph.txt", optUnit.format())
+//   Process(s"dot -Tsvg $filePath.opt_graph.txt -o $filePath.opt_graph.svg").!(ProcessLogger(_ => ()))
+// }
+//
+// if (parsedArgs.enabled(ParsedArgs.ABS_ASM)) {
+//   printFile(filePath + ".abs_asm.txt", asmProgram.toString)
+// }
+//
+// printFile(filePath + ".asm", assembly)
+// Process(s"fasm $filePath.asm $filePath.exe").!(ProcessLogger(_ => ()))
+//
+// if (parsedArgs.enabled(ParsedArgs.RUN)) {
+//   Process(filePath).!
+// }
+
+@main def main(args: String*): Unit = (for {
+  (parsedArgs, cmdLine) <- processCmdLine(args.toList)
+  _ <- processHelpFlag(parsedArgs, cmdLine)
+  filePath <- parsedArgs.filePath.toRight(Error.cmdLine(s"No input file provided", cmdFile.lastRange))
+  file <- File(filePath).swap.map(t => Error.cmdLine(s"Failed to read input file: ${t.getMessage}", cmdFile.lastRange)).swap
+  tokens <- tokenizeFile(file)
+  module <- parseFile(tokens, file)
+  _ = injectBuiltins(module)
+} yield {
+
+}) match {
+  case Left(error) if error.errorType != Error.EXIT =>
+    println(randomCompilerErrorString)
+    println()
+    println(error)
+  case _ => ()
+}
+
