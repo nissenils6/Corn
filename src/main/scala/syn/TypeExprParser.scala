@@ -4,7 +4,7 @@ import core.*
 import lex.*
 
 val parseIdenType = for {
-  (range, iden) <- parseIden
+  (iden, range) <- parseIden
 } yield IdenTypeExpr(iden, range)
 
 lazy val parseParenType: Parser[TypeExpr] = for {

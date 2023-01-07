@@ -1,10 +1,7 @@
 package opt
 
-import sem.GlobalVar
-
 import scala.annotation.tailrec
 import scala.collection.{immutable, mutable}
-import scala.{:+, ::}
 
 object ConstExpr {
   def unapply(data: Data): Option[ConstVal] = data match {

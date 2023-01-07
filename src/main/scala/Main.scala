@@ -94,7 +94,7 @@ object ParsedArgs {
 }
 
 @tailrec
-def parseArgs(args: List[(FilePosRange, String)], parsedArgs: ParsedArgs): Either[Error, ParsedArgs] = args match {
+def parseArgs(args: List[(FilePosRange, String)], parsedArgs: ParsedArgs): Either[CompilerError, ParsedArgs] = args match {
   case Nil => Right(parsedArgs)
   case (_, "-file") :: (_, filePath) :: rest => parseArgs(rest, ParsedArgs(Some(filePath), parsedArgs.options))
   case (range, "-file") :: _ => Left(Error.cmdLine(s"Unexpected end of line when parsing input file", range.file.lastRange))
@@ -102,7 +102,7 @@ def parseArgs(args: List[(FilePosRange, String)], parsedArgs: ParsedArgs): Eithe
   case (range, cmd) :: _ => Left(Error.cmdLine(s"Invalid command '$cmd'", range))
 }
 
-def processCmdLine(args: List[String]): Either[Error, (ParsedArgs, File)] = {
+def processCmdLine(args: List[String]): Either[CompilerError, (ParsedArgs, File)] = {
   val cmdLine = File("Command Line", args.map {
     case arg if arg.contains(' ') => s"'$arg'"
     case arg => arg
@@ -116,9 +116,9 @@ def processCmdLine(args: List[String]): Either[Error, (ParsedArgs, File)] = {
   parseArgs(cmdArgs, ParsedArgs()).map((_, cmdLine))
 }
 
-def processHelpFlag(parsedArgs: ParsedArgs, cmdLine: File): Either[Error, Unit] = {
+def processHelpFlag(parsedArgs: ParsedArgs, cmdLine: File): Either[CompilerError, Unit] = {
   if (parsedArgs.enabled(ParsedArgs.HELP)) {
-    println(window("HELP", help))
+    println(help)
     Left(Error.exit(cmdLine))
   } else {
     Right(())
@@ -178,20 +178,22 @@ def processHelpFlag(parsedArgs: ParsedArgs, cmdLine: File): Either[Error, Unit] 
 // }
 
 @main def main(args: String*): Unit = (for {
-  (parsedArgs, cmdLine) <- processCmdLine(args.toList)
-  _ <- processHelpFlag(parsedArgs, cmdLine)
+  cmdLine <- processCmdLine(args.toList)
+  (parsedArgs, cmdFile) = cmdLine
+  _ <- processHelpFlag(parsedArgs, cmdFile)
   filePath <- parsedArgs.filePath.toRight(Error.cmdLine(s"No input file provided", cmdFile.lastRange))
   file <- File(filePath).swap.map(t => Error.cmdLine(s"Failed to read input file: ${t.getMessage}", cmdFile.lastRange)).swap
   tokens <- tokenizeFile(file)
   module <- parseFile(tokens, file)
   _ = injectBuiltins(module)
+  _ <- resolveTypes(module)
 } yield {
-
+  println(tokens.mkString(" "))
+  println(module.format)
 }) match {
-  case Left(error) if error.errorType != Error.EXIT =>
-    println(randomCompilerErrorString)
+  case Left(CompilerError(errorMessage)) =>
     println()
-    println(error)
+    println(errorMessage)
   case _ => ()
 }
 

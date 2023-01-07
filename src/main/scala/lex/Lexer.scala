@@ -46,7 +46,7 @@ private val escapedChars = Map('t' -> '\t', 'b' -> '\b', 'n' -> '\n', 'r' -> '\r
 private val escapedCharsInverted = escapedChars.map(_.swap)
 private val symbols = Set(":", "=>", "=", "|>", ":=", "::")
 private val specialSymbols = "()[]{}.,;@!".toSet
-private val keywords = Set("if", "then", "else", "while", "true", "false", "mut")
+private val keywords = Set("if", "then", "else", "while", "true", "false", "mut", "type")
 
 def unescapeChar(char: Char): String = if (escapedCharsInverted.contains(char)) {
   "\\" + escapedCharsInverted(char)
@@ -102,7 +102,7 @@ object KeywordString {
   def unapply(string: String): Option[String] = Some(string).filter(keywords.contains)
 }
 
-def tokenizeFile(file: File): Either[Error, List[Token]] = {
+def tokenizeFile(file: File): Either[CompilerError, List[Token]] = {
   object Range {
     def unapply(int: Int): Option[FilePosRange] = Some(FilePosRange(int, int + 1, file))
   }

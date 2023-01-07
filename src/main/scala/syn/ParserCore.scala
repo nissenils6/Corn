@@ -234,16 +234,16 @@ def parseSymbol(symbol: String): Parser[FilePosRange] = Parser {
   case _ => Left(ParserErrorExpected("End of file", None, List(s"'$symbol'")))
 }
 
-val parseIden: Parser[(FilePosRange, String)] = Parser {
-  case IdenToken(iden, range) :: rest => Right((rest, (range, iden)))
+val parseIden: Parser[(String, FilePosRange)] = Parser {
+  case IdenToken(iden, range) :: rest => Right((rest, (iden, range)))
   case token :: _ => Left(ParserErrorExpected(token.format, Some(token.range), List(s"identifier")))
   case _ => Left(ParserErrorExpected("End of file", None, List(s"identifier")))
 }
 
-def parseIden(p: String => Boolean): Parser[(FilePosRange, String)] = for {
-  (range, iden) <- parseIden
+def parseIden(p: String => Boolean): Parser[( String, FilePosRange)] = for {
+  (iden, range) <- parseIden
   if p(iden)
-} yield (range, iden)
+} yield (iden, range)
 
 def joinExpectedList(list: List[String]): String = list match {
   case Nil => ""
@@ -252,7 +252,7 @@ def joinExpectedList(list: List[String]): String = list match {
   case a :: rest => s"$a, ${joinExpectedList(rest)}"
 }
 
-def parseFile(tokens: List[Token], file: File): Either[Error, Module] = parseGlobalStmts.t(tokens) match {
+def parseFile(tokens: List[Token], file: File): Either[CompilerError, Module] = parseGlobalStmts.t(tokens) match {
   case Right((Nil, globalStmts)) => Right(Module(globalStmts, file))
   case Right((token :: _, _)) => Left(Error.syntax(s"Could not parse ${token.format}", token.range))
   case Left(ParserErrorExpected(found, range, expected)) => Left(Error.syntax(s"Unexpected $found expected ${joinExpectedList(expected)}", range.getOrElse(file.lastRange)))

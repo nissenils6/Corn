@@ -3,6 +3,7 @@ package syn
 import core.*
 import lex.*
 import sem.*
+import sem.ConstUnit.datatype
 
 import scala.collection.mutable
 
@@ -35,7 +36,7 @@ case class LocalConst(name: String, datatype: Datatype) extends Const {
 
 }
 
-case class TypeVar(name: String) {
+case class TypeVar(name: String, stmt: Option[TypeGlobalStmt]) {
   var value: Option[Datatype] = None
 }
 
@@ -59,7 +60,6 @@ abstract class Expr {
     case UnitExpr(_) => "()"
     case DotExpr(expr, iden, _) => s"${expr.format(indentation)}.$iden"
     case FunExpr(parameters, returnType, expr, _) => s"(${parameters.map(_.format(indentation)).mkString(", ")})${returnType.map(": " + _).getOrElse("")} => ${expr.format(indentation)}"
-    case BuiltinFunExpr(parameterPatterns, returnTypeExpr, _, _, _) => s"(${parameterPatterns.mkString(", ")}): $returnTypeExpr => <builtin>"
     case IfExpr(condition, ifBlock, elseBlock, _) => s"if ${condition.format(indentation)} then ${ifBlock.format(indentation)} else ${elseBlock.format(indentation)}"
   }
 }
@@ -90,7 +90,7 @@ case class FunExpr(parameterPatterns: List[Pattern[LocalVar]], returnTypeExpr: O
   var signature: Option[FunDatatype] = None
 }
 
-case class BuiltinFunExpr(parameters: List[Datatype], returnType: Datatype, eval: Option[List[ConstVal] => ConstVal], optFun: Option[opt.Fun], range: FilePosRange) extends Expr with Fun {
+case class BuiltinFun(parameters: List[Datatype], returnType: Datatype, eval: Option[List[ConstVal] => ConstVal], optFun: Option[opt.Fun]) extends Fun {
   val signature: Option[FunDatatype] = Some(FunDatatype(parameters, returnType, false))
 }
 
@@ -139,21 +139,29 @@ abstract class Pattern[T <: AnyVar] {
   def range: FilePosRange
 
   def format(indentation: Int): String = this match {
-    case VarPattern(name, datatype, _) => s"$name${datatype.map(": " + _).getOrElse("")}"
+    case VarPattern(name, typeExpr, _) => s"$name : ${typeExpr.map(_.toString).getOrElse("auto")}"
     case TuplePattern(elements, _) => s"(${elements.map(_.format(indentation)).mkString(", ")})"
+  }
+
+  def incomplete: Boolean = this match {
+    case VarPattern(_, typeExpr, _) => typeExpr.isEmpty
+    case TuplePattern(elements, _) => elements.exists(_.incomplete)
   }
 }
 
-case class VarPattern[T <: AnyVar](name: String, datatype: Option[TypeExpr], range: FilePosRange) extends Pattern[T] {
+case class VarPattern[T <: AnyVar](name: String, typeExpr: Option[TypeExpr], range: FilePosRange) extends Pattern[T] {
   var variable: Option[T] = None
 }
 
 case class TuplePattern[T <: AnyVar](elements: List[Pattern[T]], range: FilePosRange) extends Pattern[T]
 
 abstract class GlobalStmt {
-  override def toString: String = this match {
-    case VarGlobalStmt(pattern, expr, _) => s"${pattern.format(0)} = ${expr.format(0)}"
-    case TypeGlobalStmt(name, typeExpr) => s"type $name = $typeExpr"
+  def range: FilePosRange
+
+  def format(indentation: Int): String = this match {
+    case VarGlobalStmt(pattern, expr, _) => s"${" " * indentation}${pattern.format(indentation)} = ${expr.format(indentation)}\n"
+    case constGlobalStmt@ConstGlobalStmt(pattern, expr, _) => s"${" " * indentation}${pattern.format(indentation)} : ${expr.format(indentation)}\n"
+    case typeGlobalStmt@TypeGlobalStmt(name, typeExpr, _, _) => s"${" " * indentation}type $name = $typeExpr\n"
   }
 }
 
@@ -165,12 +173,35 @@ case class ConstGlobalStmt(pattern: Pattern[GlobalConst], expr: Expr, range: Fil
   var value: Option[ConstVal] = None
 }
 
-case class TypeGlobalStmt(name: String, typeExpr: TypeExpr) extends GlobalStmt {
-  val typeVar: TypeVar = TypeVar(name)
+case class TypeGlobalStmt(name: String, typeExpr: TypeExpr, nameRange: FilePosRange, range: FilePosRange) extends GlobalStmt {
+  val typeVar: TypeVar = TypeVar(name, Some(this))
 }
 
 case class Module(globalStmts: List[GlobalStmt], file: File) {
-  var vars: mutable.Map[String, GlobalVar] = mutable.Map.empty
-  var consts: mutable.Map[String, GlobalConst] = mutable.Map.empty
-  var types: mutable.Map[String, TypeVar] = mutable.Map.empty
+  val vars: mutable.Map[String, GlobalVar] = mutable.Map.empty
+  val consts: mutable.Map[String, List[GlobalConst]] = mutable.Map.empty
+  val types: mutable.Map[String, TypeVar] = mutable.Map.empty
+
+  val varStmts: List[VarGlobalStmt] = globalStmts.filter(_.isInstanceOf[VarGlobalStmt]).asInstanceOf[List[VarGlobalStmt]]
+  val constStmts: List[ConstGlobalStmt] = globalStmts.filter(_.isInstanceOf[ConstGlobalStmt]).asInstanceOf[List[ConstGlobalStmt]]
+  val typeStmts: List[TypeGlobalStmt] = globalStmts.filter(_.isInstanceOf[TypeGlobalStmt]).asInstanceOf[List[TypeGlobalStmt]]
+
+  def addConst(const: GlobalConst): Unit = if (consts.contains(const.name)) {
+    consts(const.name) = const :: consts(const.name)
+  } else {
+    consts(const.name) = List(const)
+  }
+
+  def formatConsts: String = (for {
+    constList <- consts.values
+    globalConst@GlobalConst(name, datatype) <- constList
+  } yield s"  $name : $datatype : ${globalConst.value.map(_.toString).getOrElse("???")}\n").mkString
+
+  def formatTypes: String = (for {
+    typeVar@TypeVar(name, _) <- types.values
+  } yield s"  $name = ${typeVar.value.map(_.toString).getOrElse("???")}\n").mkString
+
+  def formatGlobalStmts: String = globalStmts.map(_.format(1)).mkString("\n")
+
+  def format: String = s"module ${file.name} {\n consts {\n$formatConsts }\n\n types {\n$formatTypes }\n\n$formatGlobalStmts\n}"
 }

@@ -1,7 +1,8 @@
 package core
 
+import core.Error.EXIT
 import lex.Token
-import sem.{Datatype, LocalVar}
+import sem.Datatype
 import syn.Expr
 
 import java.io.{FileReader, PrintWriter}
@@ -11,8 +12,24 @@ import scala.io.BufferedSource
 import scala.math
 import scala.util.Using
 
-extension[T] (list: List[Option[T]]) {
-  def extract: Option[List[T]] = if list.forall(_.nonEmpty) then Some(list.map(_.get)) else None
+extension[A] (list: List[Option[A]]) {
+  def extract: Option[List[A]] = if list.forall(_.nonEmpty) then Some(list.map(_.get)) else None
+}
+
+extension[E, A] (list: List[Either[E, A]]) {
+  def extract: Either[List[E], List[A]] = if list.forall(_.isRight) then Right(list.map(_.toOption.get)) else Left(list.collect { case Left(error) => error })
+}
+
+extension[E, A] (either: Either[E, A]) {
+  def mapLeft[E2](f: E => E2): Either[E2, A] = either match {
+    case Left(v) => Left(f(v))
+    case _ => either.asInstanceOf[Either[E2, A]]
+  }
+
+  def mapBoth[E2, A2](f: E => E2, g: A => A2): Either[E2, A2] = either match {
+    case Left(v) => Left(f(v))
+    case Right(v) => Right(g(v))
+  }
 }
 
 extension (int: Int) {
@@ -25,7 +42,13 @@ case class ErrorComponent(range: FilePosRange, message: Option[String] = None) {
 }
 
 abstract class CompilerError extends Exception {
-
+  @targetName("combine")
+  def |(that: CompilerError): CompilerError = (this, that) match {
+    case (error1: Error, error2: Error) => ErrorGroup(List(error1, error2))
+    case (error: Error, group: ErrorGroup) => ErrorGroup(error :: group.errors)
+    case (group: ErrorGroup, error: Error) => ErrorGroup(error :: group.errors)
+    case (group1: ErrorGroup, group2: ErrorGroup) => ErrorGroup(group1.errors ::: group2.errors)
+  }
 }
 
 case class Error(errorType: String, file: File, components: List[ErrorComponent], message: Option[String] = None) extends CompilerError {
@@ -36,46 +59,31 @@ case class ErrorGroup(errors: List[Error]) extends CompilerError {
   override def toString: String = errors.mkString("\n")
 }
 
+object CompilerError {
+  def unapply(compilerError: CompilerError): Option[String] = compilerError match {
+    case error: Error if error.errorType == Error.EXIT => None
+    case compilerError: CompilerError => Some(compilerError.toString)
+  }
+}
+
 object Error {
   val CMD_LINE = "Command Line"
   val LEXICAL = "Lexical"
   val SYNTAX = "Syntax"
   val SEMANTIC = "Semantic"
-  val INTERNAL = "Internal"
   val EXIT = "Exit"
 
   def cmdLine(message: String, range: FilePosRange): Error =
     Error(CMD_LINE, range.file, List(ErrorComponent(range, Some(message))))
-
-  def lexical(message: String, range: FilePosRange): Error =
-    Error(LEXICAL, range.file, List(ErrorComponent(range, Some(message))))
 
   def syntax(message: String, range: FilePosRange): Error =
     Error(SYNTAX, range.file, List(ErrorComponent(range, Some(message))))
 
   def semantic(message: String, range: FilePosRange): Error =
     Error(SEMANTIC, range.file, List(ErrorComponent(range, Some(message))))
-
-  def internal(file: File): Error =
-    Error(INTERNAL, file, List.empty)
-
-  def internal(range: FilePosRange): Error =
-    Error(INTERNAL, range.file, List(ErrorComponent(range)))
-
-  def internal(message: String, range: FilePosRange): Error =
-    Error(INTERNAL, range.file, List(ErrorComponent(range, Some(message))))
-
+  
   def exit(cmdLine: File): Error =
     Error(EXIT, cmdLine, List.empty, None)
-
-  def typeMismatch(datatype: Datatype, expectedDatatype: Datatype, range: FilePosRange, patternRange: FilePosRange): Error =
-    Error(SEMANTIC, range.file, List(
-      ErrorComponent(patternRange, Some(s"'$expectedDatatype' expected")),
-      ErrorComponent(range, Some(s"'$datatype' provided"))
-    ), Some("Type mismatch"))
-
-  def datatypeExpected(range: FilePosRange): Error =
-    Error(SEMANTIC, range.file, List(ErrorComponent(range, Some(s"Expected compile-time expression evaluating to value of type 'Type'"))))
 }
 
 class File(val name: String, val source: String) {

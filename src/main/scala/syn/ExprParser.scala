@@ -31,25 +31,25 @@ def isMultOp(s: String) = s match {
   case _ => false
 }
 
-def parseOperatorLeftAssoc(sepParser: Parser[(FilePosRange, String)], exprParser: => Parser[Expr]): Parser[Expr] = for {
+def parseOperatorLeftAssoc(sepParser: Parser[(String, FilePosRange)], exprParser: => Parser[Expr]): Parser[Expr] = for {
   (expr :: restExprs, restSeps) <- exprParser.sepByC(sepParser)
 } yield {
   @tailrec
-  def foldExprs(accExpr: Expr, exprs: List[Expr], seps: List[(FilePosRange, String)]): Expr = (exprs, seps) match {
+  def foldExprs(accExpr: Expr, exprs: List[Expr], seps: List[(String, FilePosRange)]): Expr = (exprs, seps) match {
     case (Nil, Nil) => accExpr
-    case (expr :: restExprs, (range, op) :: restSeps) => foldExprs(CallExpr(IdenExpr(op, range), List(accExpr, expr), accExpr.range | expr.range), restExprs, restSeps)
+    case (expr :: restExprs, (op, range) :: restSeps) => foldExprs(CallExpr(IdenExpr(op, range), List(accExpr, expr), accExpr.range | expr.range), restExprs, restSeps)
     case _ => assert(false, "unreachable")
   }
 
   foldExprs(expr, restExprs, restSeps)
 }
 
-def parseOperatorRightAssoc(sepParser: Parser[(FilePosRange, String)], exprParser: => Parser[Expr]): Parser[Expr] = for {
+def parseOperatorRightAssoc(sepParser: Parser[(String, FilePosRange)], exprParser: => Parser[Expr]): Parser[Expr] = for {
   (restExprs, restSeps) <- exprParser.sepByC(sepParser)
 } yield {
-  def foldExprs(exprs: List[Expr], seps: List[(FilePosRange, String)]): Expr = (exprs, seps) match {
+  def foldExprs(exprs: List[Expr], seps: List[(String, FilePosRange)]): Expr = (exprs, seps) match {
     case (List(expr), Nil) => expr
-    case (left :: restExprs, (range, op) :: restSeps) =>
+    case (left :: restExprs, (op, range) :: restSeps) =>
       val right = foldExprs(restExprs, restSeps)
       CallExpr(IdenExpr(op, range), List(left, right), left.range | right.range)
     case _ => assert(false, "unreachable")
@@ -81,7 +81,7 @@ lazy val parseUnary: Parser[Expr] = parseRef <|> parseVal <|> parseHighPrec
 lazy val parseDot: Parser[Expr] = for {
   expr <- parseAtom
   _ <- parseSymbol(".")
-  (range, iden) <- parseIden
+  (iden, range) <- parseIden
 } yield DotExpr(expr, iden, expr.range | range)
 
 lazy val parseFunCall: Parser[Expr] = for {
@@ -134,7 +134,7 @@ val parseFalseExpr: Parser[Expr] = for {
 } yield BoolExpr(false, range)
 
 val parseIdenExpr: Parser[Expr] = for {
-  (range, iden) <- parseIden
+  (iden, range) <- parseIden
 } yield IdenExpr(iden, range)
 
 lazy val parseIfExpr: Parser[Expr] = for {

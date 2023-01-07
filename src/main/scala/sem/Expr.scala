@@ -1,14 +1,5 @@
 package sem
 
-import core.*
-import syn.AssignExpr
-
-import scala.annotation.tailrec
-import scala.collection.immutable.List
-import scala.collection.mutable
-import scala.compiletime.ops.int
-import scala.concurrent.ExecutionContext.global
-
 //abstract class Expr() {
 //  def module: Module
 //  def range: FilePosRange

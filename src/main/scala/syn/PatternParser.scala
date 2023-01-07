@@ -4,7 +4,7 @@ import core.*
 import lex.*
 
 val parseVarPattern: Parser[Pattern[AnyVar]] = for {
-  (range, iden) <- parseIden
+  (iden, range) <- parseIden
   typeExpr <- (parseSymbol(":") *> parseType).opt
 } yield VarPattern(iden, typeExpr, range)
 
