@@ -97,10 +97,10 @@ lazy val parseFunExpr: Parser[Expr] = for {
   startRange <- parseSymbol("(")
   params <- parsePattern.sepBy(parseSymbol(","))
   _ <- parseSymbol(")")
-  returnType <- parseType.opt
+  returnType <- (parseSymbol(":") *> parseType).opt
   _ <- parseSymbol("=>").opt
   expr <- parseExpr
-} yield FunExpr(params.asInstanceOf[List[Pattern[LocalVar]]], returnType, expr, startRange | expr.range)
+} yield FunExpr(params.asInstanceOf[List[Pattern[Var]]], returnType, expr, startRange | expr.range)
 
 lazy val parseParenExpr: Parser[Expr] = for {
   startRange <- parseSymbol("(")

@@ -3,40 +3,77 @@ package sem
 import core.*
 import syn.*
 
-private def reduceOptionalErrors(errors: List[Option[CompilerError]]): Option[CompilerError] = errors.flatten match {
-  case Nil => None
-  case _ => Some(errors.reduce(_ | _))
+private def setParentRecursive(parent: ConstAndTypeContainer)(expr: Expr): Unit = expr match {
+  case CallExpr(function, args, _) => (function :: args).foreach(setParentRecursive(parent))
+  case IdenExpr(_, _) => ()
+  case RefExpr(expr, _) => setParentRecursive(parent)(expr)
+  case ValExpr(expr, _) => setParentRecursive(parent)(expr)
+  case IntExpr(_, _) => ()
+  case BoolExpr(_, _) => ()
+  case TupleExpr(elements, _) => elements.foreach(setParentRecursive(parent))
+  case newParent@BlockExpr(stmts, expr, _) =>
+    newParent.parent = Some(parent)
+    stmts.foreach {
+      case ExprStmt(expr, _) => setParentRecursive(newParent)(expr)
+      case AssignVarStmt(_, expr, _) => setParentRecursive(newParent)(expr)
+      case AssignRefStmt(refExpr, expr, _) =>
+        setParentRecursive(newParent)(refExpr)
+        setParentRecursive(newParent)(expr)
+      case LocalVarStmt(_, expr, _) =>
+        setParentRecursive(newParent)(expr)
+      case LocalConstStmt(_, expr, _) =>
+        setParentRecursive(newParent)(expr)
+      case LocalTypeStmt(_, _, _, _) => ()
+    }
+    setParentRecursive(newParent)(expr)
+  case UnitExpr(_) => ()
+  case DotExpr(expr, _, _) => setParentRecursive(parent)(expr)
+  case FunExpr(_, _, expr, _) => setParentRecursive(parent)(expr)
+  case IfExpr(condition, ifBlock, elseBlock, _) =>
+    setParentRecursive(parent)(condition)
+    setParentRecursive(parent)(ifBlock)
+    setParentRecursive(parent)(elseBlock)
 }
 
-private def resolveTypeExprRecursive(module: Module, typeExpr: TypeExpr, visited: List[(TypeGlobalStmt, FilePosRange)]): Either[CompilerError, Datatype] = typeExpr match {
+def resolveScopeParents(module: Module): Unit = {
+  module.varStmts.map(_.expr).foreach(setParentRecursive(module))
+  module.constStmts.map(_.expr).foreach(setParentRecursive(module))
+}
+
+private def reduceOptionalErrors(errors: List[Option[CompilerError]]): Option[CompilerError] = errors.flatten match {
+  case Nil => None
+  case errors => Some(errors.reduce(_ | _))
+}
+
+private def resolveTypeExprRecursive(container: ConstAndTypeContainer, typeExpr: TypeExpr, visited: List[(TypeStmt, FilePosRange)]): Either[CompilerError, Datatype] = typeExpr match {
   case UnitTypeExpr(_) => Right(UnitDatatype)
   case IdenTypeExpr(iden, range) => for {
-    typeVar <- module.types.get(iden).toRight(Error.semantic(s"Could not resolve '$iden' as a type", range))
-    datatype <- resolveTypeVar(module, typeVar, range, visited)
+    typeVar <- container.lookupType(iden, range)
+    datatype <- resolveTypeVar(container, typeVar, range, visited)
   } yield datatype
   case TupleTypeExpr(elements, _) => for {
-    datatypes <- elements.map(typeExpr => resolveTypeExprRecursive(module, typeExpr, visited)).extract.mapLeft(_.reduce(_ | _))
+    datatypes <- elements.map(typeExpr => resolveTypeExprRecursive(container, typeExpr, visited)).extract.mapLeft(_.reduce(_ | _))
   } yield TupleDatatype(datatypes, false)
   case MutTypeExpr(typeExpr, range) => ???
   case RefTypeExpr(typeExpr, range) => ???
   case FunTypeExpr(params, returnType, range) => ???
 }
 
-private def resolveTypeVar(module: Module, typeVar: TypeVar, cause: FilePosRange, visited: List[(TypeGlobalStmt, FilePosRange)]): Either[CompilerError, Datatype] = typeVar.value match {
+private def resolveTypeVar(container: ConstAndTypeContainer, typeVar: TypeVar, causeRange: FilePosRange, visited: List[(TypeStmt, FilePosRange)]): Either[CompilerError, Datatype] = typeVar.value match {
   case Some(datatype) => Right(datatype)
   case None =>
     val typeStmt = typeVar.stmt.get
     val index = visited.indexWhere(_._1 eq typeStmt)
     if (index >= 0) {
-      val chain = ((typeStmt, cause) :: visited).take(index + 2).reverse
+      val chain = ((typeStmt, causeRange) :: visited).take(index + 2).reverse
       val components = ErrorComponent(chain.head._2, Some(s"type '${chain.head._1.name}' is to be evaluated")) ::
         chain.tail.zip(chain).map { case ((cur, range), (cause, _)) =>
           ErrorComponent(range, Some(s"In order to evaluate type '${cause.name}', type '${cur.name}' must be evaluated"))
         }
-      Left(Error(Error.SEMANTIC, module.file, components, Some(s"Cycle detected when trying to evaluate type '${typeStmt.name}'")))
+      Left(Error(Error.SEMANTIC, causeRange.file, components, Some(s"Cycle detected when trying to evaluate type '${typeStmt.name}'")))
     } else {
       for {
-        datatype <- resolveTypeExprRecursive(module, typeStmt.typeExpr, (typeStmt, cause) :: visited)
+        datatype <- resolveTypeExprRecursive(container, typeStmt.typeExpr, (typeStmt, causeRange) :: visited)
       } yield {
         typeVar.value = Some(datatype)
         datatype
@@ -44,70 +81,69 @@ private def resolveTypeVar(module: Module, typeVar: TypeVar, cause: FilePosRange
     }
 }
 
-def resolveTypes(module: Module): Either[CompilerError, Unit] = for {
-  _ <- module.typeStmts.map {
-    case typeGlobalStmt: TypeGlobalStmt =>
-      module.types.get(typeGlobalStmt.name) match {
-        case Some(prior) =>
-          val newDefinition = ErrorComponent(typeGlobalStmt.nameRange, Some(s"new definition of type '${typeGlobalStmt.name}'"))
-          if (prior.stmt.nonEmpty) {
-            val definedHere = ErrorComponent(prior.stmt.get.nameRange, Some(s"but '${prior.name}' is already defined here"))
-            Left(Error(Error.SEMANTIC, module.file, List(newDefinition, definedHere), Some(s"multiple type definitions with the same name '${typeGlobalStmt.name}'")))
-          } else {
-            Left(Error(Error.SEMANTIC, module.file, List(newDefinition), Some(s"type definition with same name as builtin type '${typeGlobalStmt.name}'")))
-          }
-        case None =>
-          module.types(typeGlobalStmt.name) = typeGlobalStmt.typeVar
-          Right(())
-      }
-  }.extract.mapBoth(_.asInstanceOf[List[CompilerError]].reduce(_ | _), _ => ())
-
-  _ <- module.typeStmts.map {
-    case typeGlobalStmt: TypeGlobalStmt =>
-      resolveTypeVar(module, typeGlobalStmt.typeVar, typeGlobalStmt.nameRange, List())
+def resolveTypes(container: ConstAndTypeContainer): Either[CompilerError, Unit] = for {
+  _ <- container.typeStmts.map { typeStmt =>
+    container.addType(typeStmt.typeVar)
+  }.extract.mapBoth(_.reduce(_ | _), _ => ())
+  _ <- container.typeStmts.map { typeStmt =>
+    resolveTypeVar(container, typeStmt.typeVar, typeStmt.nameRange, List())
   }.extract.mapBoth(_.reduce(_ | _), _ => ())
 } yield ()
 
-private def resolveTypeExpr(module: Module, typeExpr: TypeExpr): Either[CompilerError, Datatype] = typeExpr match {
+private def resolveTypeExpr(container: ConstAndTypeContainer, typeExpr: TypeExpr): Either[CompilerError, Datatype] = typeExpr match {
   case UnitTypeExpr(_) => Right(UnitDatatype)
-  case IdenTypeExpr(iden, _) => module.types.get(iden).map(_.value.get).toRight(Error.semantic(s"Could not resolve '$iden' as a type", range))
+  case IdenTypeExpr(iden, range) => container.types.get(iden).map(_.value.get).toRight(Error.semantic(s"Could not resolve '$iden' as a type", range))
   case TupleTypeExpr(elements, _) => for {
-    datatypes <- elements.map(e => resolveTypeExpr(module, e)).extract
+    datatypes <- elements.map(e => resolveTypeExpr(container, e)).extract.mapLeft(_.reduce(_ | _))
   } yield TupleDatatype(datatypes, false)
   case MutTypeExpr(typeExpr, range) => ???
   case RefTypeExpr(typeExpr, range) => ???
   case FunTypeExpr(params, returnType, range) => ???
 }
 
-private def trivialTypeOf[T <: AnyVar](module: Module, pattern: Pattern[T]): Either[Option[CompilerError], Datatype] = pattern match {
+private def trivialTypeOf[T <: AnyVar](container: ConstAndTypeContainer, pattern: Pattern[T]): Either[Option[CompilerError], Datatype] = pattern match {
   case VarPattern(_, typeExprOpt, _) => for {
     typeExpr <- typeExprOpt.toRight(None)
-    datatype <- resolveTypeExpr(module, typeExpr).mapLeft(Some.apply)
+    datatype <- resolveTypeExpr(container, typeExpr).mapLeft(Some.apply)
   } yield datatype
-  case TuplePattern(elements, _) => elements.map(p => trivialTypeOf(module, p)).extract.mapBoth(reduceOptionalErrors, datatypes => TupleDatatype(datatypes, false))
+  case TuplePattern(elements, _) => elements.map(p => trivialTypeOf(container, p)).extract.mapBoth(reduceOptionalErrors, datatypes => TupleDatatype(datatypes, false))
 }
 
-private def trivialTypeof(module: Module, expr: Expr): Either[Option[CompilerError], Datatype] = expr match {
-  case CallExpr(function, _, _) => trivialTypeof(module, function).flatMap {
-    case FunDatatype(_, returnType, _) => Right(returnType)
-    case datatype => Left(Some(Error.semantic(s"Expected the expression to be invoked to be of a function type, found expression of type '$datatype'", function.range)))
-  }
+private def trivialTypeof(container: ConstAndTypeContainer, expr: Expr): Either[Option[CompilerError], Datatype] = expr match {
+  case CallExpr(function, _, _) => for {
+    funType <- trivialTypeof(container, function)
+    newType <- funType match {
+      case FunDatatype(_, returnType, _) => Right(returnType)
+      case datatype => Left(Some(Error.semantic(s"Expected the expression to be invoked to be of a function type, found expression of type '$datatype'", function.range)))
+    }
+  } yield newType
   case IdenExpr(_, _) => Left(None)
-  case RefExpr(expr, _) => ???
-  case ValExpr(expr, _) => ???
+  case RefExpr(expr, _) => for {
+    exprType <- trivialTypeof(container, expr)
+  } yield RefDatatype(exprType, false)
+  case ValExpr(expr, _) => for {
+    exprType <- trivialTypeof(container, expr)
+    newType <- exprType match {
+      case RefDatatype(datatype, _) => Right(datatype)
+      case datatype => Left(Some(Error.semantic(s"Expected the expression to be invoked to be of a reference type, found expression of type '$datatype'", expr.range)))
+    }
+  } yield newType
   case IntExpr(_, _) => Right(IntDatatype)
   case BoolExpr(_, _) => Right(BoolDatatype)
-  case TupleExpr(elements, _) => elements.map(e => trivialTypeof(module, e)).extract.mapBoth(reduceOptionalErrors, datatypes => TupleDatatype(datatypes, false))
-  case BlockExpr(_, expr, _) => trivialTypeof(module, expr)
+  case TupleExpr(elements, _) => elements.map(e => trivialTypeof(container, e)).extract.mapBoth(reduceOptionalErrors, datatypes => TupleDatatype(datatypes, false))
+  case BlockExpr(_, expr, _) => trivialTypeof(container, expr)
   case UnitExpr(_) => Right(UnitDatatype)
   case DotExpr(expr, iden, _) => ???
-  case FunExpr(parameterPatterns, returnTypeExpr, _, _) => for {
-    params <- parameterPatterns.map(p => trivialTypeOf(module, p)).extract.mapLeft(reduceOptionalErrors)
-    returnType <- resolveTypeExpr(module, returnTypeExpr).mapLeft(Some.apply)
+  case FunExpr(parameterPatterns, returnTypeExpr, expr, _) => for {
+    params <- parameterPatterns.map(p => trivialTypeOf(container, p)).extract.mapLeft(reduceOptionalErrors)
+    returnType <- (for {
+      typeExpr <- returnTypeExpr.toRight(None)
+      returnType <- resolveTypeExpr(container, typeExpr).mapLeft(Some.apply)
+    } yield returnType).orElse(trivialTypeof(container, expr))
   } yield FunDatatype(params, returnType, false)
-  case IfExpr(_, ifBlock, elseBlock, _) => for {
-    ifType <- trivialTypeof(module, ifBlock)
-    elseType <- trivialTypeof(module, elseBlock)
+  case IfExpr(_, ifBlock, elseBlock, range) => for {
+    ifType <- trivialTypeof(container, ifBlock)
+    elseType <- trivialTypeof(container, elseBlock)
     result <- (ifType, elseType) match {
       case (UnitDatatype, UnitDatatype) => Right(UnitDatatype)
       case (_, UnitDatatype) => Right(ifType)
@@ -116,46 +152,63 @@ private def trivialTypeof(module: Module, expr: Expr): Either[Option[CompilerErr
       case _ =>
         val ifBranch = ErrorComponent(ifBlock.range, Some(s"The if branch is of type '$ifType'"))
         val elseBranch = ErrorComponent(elseBlock.range, Some(s"The else branch is of type '$elseType'"))
-        Left(Some(Error(Error.SEMANTIC, module.file, List(ifBranch, elseBranch), Some(s"Both branches of an if statement must return the same value"))))
+        Left(Some(Error(Error.SEMANTIC, range.file, List(ifBranch, elseBranch), Some(s"Both branches of an if statement must return the same value"))))
     }
   } yield result
 }
 
-def visitIncompletePattern(module: Module, pattern: Pattern[GlobalConst], datatype: Datatype): Either[CompilerError, Unit] = pattern match {
+private def visitIncompletePattern(container: ConstAndTypeContainer, pattern: Pattern[Const], datatype: Datatype): Either[CompilerError, Unit] = pattern match {
   case pattern@VarPattern(name, typeExpr, _) => typeExpr match {
     case Some(typeExpr) => for {
-      resolvedDatatype <- resolveTypeExpr(module, typeExpr)
+      resolvedDatatype <- resolveTypeExpr(container, typeExpr)
       result <- if (datatype.isSubtypeOf(resolvedDatatype)) {
-        val const = GlobalConst(name, resolvedDatatype)
-        pattern.variable = const
-        module.addConst(const)
+        val const = Const(name, resolvedDatatype)
+        pattern.variable = Some(const)
+        container.addConst(const)
         Right(())
       } else {
         Left(Error.semantic(s"Type mismatch, variable of type $resolvedDatatype does not match value of type $datatype", typeExpr.range))
       }
     } yield result
     case None =>
-      val const = GlobalConst(name, datatype)
-      pattern.variable = const
-      module.addConst(const)
+      val const = Const(name, datatype)
+      pattern.variable = Some(const)
+      container.addConst(const)
       Right(())
   }
-  case TuplePattern(elements, range) => datatype match {
-    case TupleDatatype(datatypes, mutable) => ???
+  case TuplePattern(patterns, range) => datatype match {
+    case TupleDatatype(datatypes, _) if patterns.length == datatypes.length => patterns.zip(datatypes).map {
+      case (p, d) => visitIncompletePattern(container, p, d)
+    }.extract.mapBoth(_.reduce(_ | _), _ => ())
     case _ => Left(Error.semantic("The pattern did not match the return type of the expression", range))
   }
 }
 
-def resolveConsts(module: Module): Either[CompilerError, Unit] = {
-  val a = module.constStmts.map { constStmt =>
-    if (constStmt.pattern.incomplete) {
-      for {
-        datatype <- trivialTypeof(module, constStmt.expr).mapLeft(_.getOrElse(Error.semantic("Constants without explicit type must be trivially type inferrable (The expression cannot reference other constants, use explicit type annotations where this is not possible)", constStmt.expr.range)))
-        _ <- visitIncompletePattern(module, constStmt.pattern, datatype)
-      } yield ()
-    } else {
-      Right(())
-    }
-  }.extract.mapBoth(_.reduce(_ | _), _ => ())
+private def visitCompletePattern(container: ConstAndTypeContainer, pattern: Pattern[Const]): Either[CompilerError, Unit] = pattern match {
+  case pattern@VarPattern(name, typeExpr, _) => for {
+    resolvedDatatype <- resolveTypeExpr(container, typeExpr.get)
+  } yield {
+    val const = Const(name, resolvedDatatype)
+    pattern.variable = Some(const)
+    container.addConst(const)
+    Right(())
+  }
+  case TuplePattern(elements, _) => elements.map(p => visitCompletePattern(container, p)).extract.mapBoth(_.reduce(_ | _), _ => ())
+}
+
+private def visitConstStmt(container: ConstAndTypeContainer, constStmt: ConstStmt) = if (constStmt.pattern.incomplete) {
+  for {
+    datatype <- trivialTypeof(container, constStmt.expr).mapLeft(_.getOrElse(Error.semantic("Constants without complete explicit type must be trivially type inferrable (The expression cannot reference other constants, use explicit type annotations where this is not possible)", constStmt.expr.range)))
+    _ <- visitIncompletePattern(container, constStmt.pattern, datatype)
+  } yield ()
+} else {
+  visitCompletePattern(container, constStmt.pattern)
+}
+
+def resolveConstTypes(container: ConstAndTypeContainer): Either[CompilerError, Unit] = container.constStmts.map(constStmt => visitConstStmt(container, constStmt)).extract.mapBoth(_.reduce(_ | _), _ => ())
+
+def resolveIdentifiers(module: Module): Either[CompilerError, Unit] = {
+
+
   Right(())
 }

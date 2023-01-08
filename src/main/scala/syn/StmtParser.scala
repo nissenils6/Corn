@@ -42,12 +42,12 @@ lazy val parseExprStmt: Parser[Stmt] = for {
   endRange <- parseSymbol(";")
 } yield ExprStmt(expr, expr.range | endRange)
 
-lazy val parseDeclareVar = parseDeclareStmt('=', VarStmt.apply)
-lazy val parseDeclareConst = parseDeclareStmt(':', ConstStmt.apply)
+lazy val parseDeclareVar = parseDeclareStmt('=', LocalVarStmt.apply)
+lazy val parseDeclareConst = parseDeclareStmt(':', LocalConstStmt.apply)
 
 lazy val parseStmt: Parser[Stmt] = parseAssignVarStmt <|> parseAssignRefStmt <|> parseDeclareVar <|> parseDeclareConst <|> parseExprStmt
 
-lazy val parseDeclareGlobalVar = parseDeclareStmt('=', VarGlobalStmt.apply)
-lazy val parseDeclareGlobalConst = parseDeclareStmt(':', ConstGlobalStmt.apply)
+lazy val parseDeclareGlobalVar = parseDeclareStmt('=', GlobalVarStmt.apply)
+lazy val parseDeclareGlobalConst = parseDeclareStmt(':', GlobalConstStmt.apply)
 
 lazy val parseGlobalStmts: Parser[List[GlobalStmt]] = (parseTypeStmt <|> parseDeclareGlobalVar <|> parseDeclareGlobalConst).many

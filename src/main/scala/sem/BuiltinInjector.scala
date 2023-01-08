@@ -16,7 +16,7 @@ private val binaryInt = List(IntDatatype, IntDatatype)
 private def injectType(module: Module, name: String, datatype: Datatype): Unit = {
   val typeVar = TypeVar(name, None)
   typeVar.value = Some(datatype)
-  module.types(name) = typeVar
+  module.addType(typeVar)
 }
 
 def injectBinaryOp(module: Module, name: String, eval: List[ConstVal] => ConstVal, params: List[Datatype], returnType: Datatype, graphOp: (opt.Data, opt.Data) => opt.OpNext, index: Int = 0): Unit = {
@@ -25,7 +25,7 @@ def injectBinaryOp(module: Module, name: String, eval: List[ConstVal] => ConstVa
   val optFun = Some(new opt.Fun(op, opt.FunDatatype(params.map(_.optDatatype), List(returnType.optDatatype)), List()))
 
   val signature = FunDatatype(params, returnType, false)
-  val globalConst = GlobalConst(name, signature)
+  val globalConst = Const(name, signature)
   globalConst.value = Some(ConstFun(BuiltinFun(params, returnType, Some(eval), optFun)))
   module.addConst(globalConst)
 }
@@ -38,7 +38,7 @@ def injectCompOp(module: Module, name: String, eval: List[ConstVal] => ConstVal,
   val optFun = Some(new opt.Fun(subOp, opt.FunDatatype(params.map(_.optDatatype), List(returnType.optDatatype)), List()))
 
   val signature = FunDatatype(params, returnType, false)
-  val globalConst = GlobalConst(name, signature)
+  val globalConst = Const(name, signature)
   globalConst.value = Some(ConstFun(BuiltinFun(params, returnType, Some(eval), optFun)))
   module.addConst(globalConst)
 }
@@ -49,7 +49,7 @@ def injectPrintln(module: Module): Unit = {
   val optFun = Some(new opt.Fun(op, opt.FunDatatype(List(opt.IntDatatype), List(opt.UnitDatatype)), List()))
 
   val signature = FunDatatype(unaryInt, IntDatatype, false)
-  val globalConst = GlobalConst("println", signature)
+  val globalConst = Const("println", signature)
   globalConst.value = Some(ConstFun(BuiltinFun(unaryInt, IntDatatype, None, optFun)))
   module.addConst(globalConst)
 }

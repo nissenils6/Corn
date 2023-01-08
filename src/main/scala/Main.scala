@@ -189,6 +189,7 @@ def processHelpFlag(parsedArgs: ParsedArgs, cmdLine: File): Either[CompilerError
   _ <- resolveTypes(module)
 } yield {
   println(tokens.mkString(" "))
+  println()
   println(module.format)
 }) match {
   case Left(CompilerError(errorMessage)) =>
@@ -196,4 +197,3 @@ def processHelpFlag(parsedArgs: ParsedArgs, cmdLine: File): Either[CompilerError
     println(errorMessage)
   case _ => ()
 }
-
