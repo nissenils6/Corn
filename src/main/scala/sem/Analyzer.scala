@@ -81,7 +81,7 @@ private def resolveTypeVar(container: ConstAndTypeContainer, typeVar: TypeVar, c
     }
 }
 
-def resolveTypes(container: ConstAndTypeContainer): Either[CompilerError, Unit] = for {
+private def resolveTypes(container: ConstAndTypeContainer): Either[CompilerError, Unit] = for {
   _ <- container.typeStmts.map { typeStmt =>
     container.addType(typeStmt.typeVar)
   }.extract.mapBoth(_.reduce(_ | _), _ => ())
@@ -196,7 +196,7 @@ private def visitCompletePattern(container: ConstAndTypeContainer, pattern: Patt
   case TuplePattern(elements, _) => elements.map(p => visitCompletePattern(container, p)).extract.mapBoth(_.reduce(_ | _), _ => ())
 }
 
-private def visitConstStmt(container: ConstAndTypeContainer, constStmt: ConstStmt) = if (constStmt.pattern.incomplete) {
+private def resolveConstType(container: ConstAndTypeContainer, constStmt: ConstStmt) = if (constStmt.pattern.incomplete) {
   for {
     datatype <- trivialTypeof(container, constStmt.expr).mapLeft(_.getOrElse(Error.semantic("Constants without complete explicit type must be trivially type inferrable (The expression cannot reference other constants, use explicit type annotations where this is not possible)", constStmt.expr.range)))
     _ <- visitIncompletePattern(container, constStmt.pattern, datatype)
@@ -205,10 +205,26 @@ private def visitConstStmt(container: ConstAndTypeContainer, constStmt: ConstStm
   visitCompletePattern(container, constStmt.pattern)
 }
 
-def resolveConstTypes(container: ConstAndTypeContainer): Either[CompilerError, Unit] = container.constStmts.map(constStmt => visitConstStmt(container, constStmt)).extract.mapBoth(_.reduce(_ | _), _ => ())
+private def resolveConstTypes(container: ConstAndTypeContainer): Either[CompilerError, Unit] = container.constStmts.map(constStmt => resolveConstType(container, constStmt)).extract.mapBoth(_.reduce(_ | _), _ => ())
 
-def resolveIdentifiers(module: Module): Either[CompilerError, Unit] = {
+private def resolveConstValue(container: ConstAndTypeContainer, constStmt: ConstStmt): Either[CompilerError, Unit] = ???
 
+private def resolveConstValues(container: ConstAndTypeContainer): Either[CompilerError, Unit] = container.constStmts.map(constStmt => resolveConstType(container, constStmt)).extract.mapBoth(_.reduce(_ | _), _ => ())
 
+private def collectModuleVars(module: Module): Unit = {
+  module.varStmts.foreach { varStmt =>
+    varStmt.pattern.foreach { case VarPattern(name, typeExpr, range) =>
+      ()
+    }
+  }
+
+  Right(())
+}
+
+def semanticAnalysis(module: Module): Either[CompilerError, Unit] = {
+  resolveTypes(module)
+  
+  
+  
   Right(())
 }

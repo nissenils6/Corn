@@ -33,19 +33,25 @@ val compilerErrorStrings: Array[String] = Array(
   "Another day, another compiler error.",
   "Please! No more compiler errors, I'm so tired of strong type systems.",
   "This error can't possibly be my fault, everything in my code is flawless. It must be the compiler that's wrong this time...",
-  "Ugh, yet another error from the finicky compiler... the modern languages insert random type conversion whenever needed to make sure the types line up. Why can't this language do that as well?",
+  "Ugh, yet another error from the finicky compiler... the modern languages insert random type conversion whenever needed to make sure the types line up. Why can't this language do that as well? " +
+    "Like when I have a list, and I try to negate that list, it is obvious that what I meant is to negate the length of the list. Don't be so picky! Who wouldn't understand that? Modern programming languages should understand that. " +
+    "Throw an error? No way that trying to negate a list is a flaw in the logic of the code and that an error should be thrown to alert the developer. Who would think that?",
   "At this point, I think the compiler is just pranking me. \"Safe language\" my ass.",
   "Phew! This error could've costed me millions if pushed to production. All hours spent trying to satisfy the compiler is really starting to pay off!",
   "Help! My brain is melting. Right now I'm just making random changes until the compiler doesn't complain anymore.",
   "Tired of compiler errors? Fear no more! I've got something for you: Javascript is the next generation programming language. " +
     "Not only is it free of compiler errors, runtime errors are delayed by having erroneous expressions evaluate to 'undefined' instead which propagate through your code. " +
-    "Ignore them and call it a day, your co-worker will eventually find out about them, and hopefully fix them, after painfully tracking 'undefined' values throughout the entire codebase.",
+    "Ignore them and call it a day, your co-worker will eventually find out about them, and hopefully fix them, after painfully tracking 'undefined' values throughout the entire codebase." +
+    "As a wise person once said: \"the later an error occurs, the better, since it will have less time to destroy software\".",
   "Who invented the concept of errors? What is the purpose even? Ahh...",
   "Congratulations! You've got yourself yet another compiler error. Here is a random thought: " +
     "If a programming language was designed to have the most information-dense grammar possible, or in other words, compressed to the theoretical maximum, with all encoding space utilized. " +
     "Then it would be impossible for that language to have compiler errors, or even error at all, since each combination of characters as source code input would correspond to exactly one semantically unique and valid program. " +
     "What a wonderful language that must be! (Fizz-buzz in that language would probably look like: \"#h/N]c?'L.%%^!dbP`=\") If you typed something that is, in your opinion, incorrect, then you would still have a valid program, just a different one.",
-  "Dude! You're making so many silly errors, even ChatGPT can do better!"
+  "Dude! You're making so many silly errors, even ChatGPT can do better!",
+  "Don't tell me this compiler error is about another missing semicolon. Like seriously, I'm about to head back to javascript with its fancy automatic semicolon insertion, not having to type semicolons is like the most important feature of a language. " +
+    "It is, in fact, what draws the line between modern languages and boomer languages. Like, imagine putting in effort to create a programming language in 2023 and then creating a semicolon based one. So useless.",
+  "Bruh! The compiler errors just keeps coming. Like, what is this shitty language? A haskell wannabe?"
 )
 
 def randomCompilerErrorString: String = compilerErrorStrings((Math.random() * compilerErrorStrings.length).toInt)
@@ -185,8 +191,8 @@ def processHelpFlag(parsedArgs: ParsedArgs, cmdLine: File): Either[CompilerError
   file <- File(filePath).swap.map(t => Error.cmdLine(s"Failed to read input file: ${t.getMessage}", cmdFile.lastRange)).swap
   tokens <- tokenizeFile(file)
   module <- parseFile(tokens, file)
+  _ = resolveScopeParents(module)
   _ = injectBuiltins(module)
-  _ <- resolveTypes(module)
 } yield {
   println(tokens.mkString(" "))
   println()

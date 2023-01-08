@@ -3,20 +3,20 @@ package syn
 import core.*
 import lex.*
 import sem.*
-import sem.ConstUnit.datatype
 
 import scala.collection.mutable
 
 abstract class AnyVar {
   def name: String
-  def datatype: Datatype
+  var datatype: Option[Datatype]
 }
 
-case class Var(name: String, datatype: Datatype) extends AnyVar {
-
+case class Var(name: String, stmt: Option[VarStmt]) extends AnyVar {
+  var datatype: Option[Datatype] = None
 }
 
-case class Const(name: String, datatype: Datatype) extends AnyVar {
+case class Const(name: String, stmt: Option[ConstStmt]) extends AnyVar {
+  var datatype: Option[Datatype] = None
   var value: Option[ConstVal] = None
 }
 
@@ -61,11 +61,11 @@ case class BoolExpr(bool: Boolean, range: FilePosRange) extends Expr
 case class TupleExpr(elements: List[Expr], range: FilePosRange) extends Expr
 
 case class BlockExpr(stmts: List[Stmt], expr: Expr, range: FilePosRange) extends Expr with ConstAndTypeContainer {
-  val parent: Option[ConstAndTypeContainer] = None
+  var parent: Option[ConstAndTypeContainer] = None
   
   val vars: mutable.Map[String, Var] = mutable.Map.empty
   val consts: mutable.Map[String, List[Const]] = mutable.Map.empty
-  val types: collection.mutable.Map[String, TypeVar] = mutable.Map.empty
+  val types: mutable.Map[String, TypeVar] = mutable.Map.empty
 
   val regStmts: List[Stmt] = stmts.filter(s => !s.isInstanceOf[LocalConstStmt] && !s.isInstanceOf[LocalTypeStmt])
   val constStmts: List[LocalConstStmt] = stmts.filter(_.isInstanceOf[LocalConstStmt]).asInstanceOf[List[LocalConstStmt]]
@@ -209,6 +209,11 @@ abstract class Pattern[T <: AnyVar] {
     case VarPattern(_, typeExpr, _) => typeExpr.isEmpty
     case TuplePattern(elements, _) => elements.exists(_.incomplete)
   }
+
+  def foreach[U](f: VarPattern[T] => U): Unit = this match {
+    case pattern: VarPattern[T] => f(pattern)
+    case TuplePattern(elements, _) => elements.foreach(_.foreach(f))
+  }
 }
 
 case class VarPattern[T <: AnyVar](name: String, typeExpr: Option[TypeExpr], range: FilePosRange) extends Pattern[T] {
@@ -242,13 +247,18 @@ case class TypeGlobalStmt(name: String, typeExpr: TypeExpr, nameRange: FilePosRa
 case class Module(globalStmts: List[GlobalStmt], file: File) extends ConstAndTypeContainer {
   val parent: Option[ConstAndTypeContainer] = None
   
-  val vars: mutable.Map[String, Var] = mutable.Map.empty
+  val vars: mutable.Map[String, List[Var]] = mutable.Map.empty
   val consts: mutable.Map[String, List[Const]] = mutable.Map.empty
   val types: mutable.Map[String, TypeVar] = mutable.Map.empty
 
   val varStmts: List[GlobalVarStmt] = globalStmts.filter(_.isInstanceOf[GlobalVarStmt]).asInstanceOf[List[GlobalVarStmt]]
   val constStmts: List[GlobalConstStmt] = globalStmts.filter(_.isInstanceOf[GlobalConstStmt]).asInstanceOf[List[GlobalConstStmt]]
   val typeStmts: List[TypeGlobalStmt] = globalStmts.filter(_.isInstanceOf[TypeGlobalStmt]).asInstanceOf[List[TypeGlobalStmt]]
+
+  def addVar(variable: Var): Unit = vars.updateWith(variable.name) {
+    case Some(list) => variable :: list
+    case None => List(variable)
+  }
 
   def formatGlobalStmts: String = globalStmts.map(_.format(1)).mkString("\n")
 
