@@ -3,41 +3,54 @@ package sem
 import core.*
 import syn.*
 
-private def setParentRecursive(parent: ConstAndTypeContainer)(expr: Expr): Unit = expr match {
-  case CallExpr(function, args, _) => (function :: args).foreach(setParentRecursive(parent))
-  case IdenExpr(_, _) => ()
-  case RefExpr(expr, _) => setParentRecursive(parent)(expr)
-  case ValExpr(expr, _) => setParentRecursive(parent)(expr)
-  case IntExpr(_, _) => ()
-  case BoolExpr(_, _) => ()
-  case TupleExpr(elements, _) => elements.foreach(setParentRecursive(parent))
-  case newParent@BlockExpr(stmts, expr, _) =>
-    newParent.parent = Some(parent)
-    stmts.foreach {
-      case ExprStmt(expr, _) => setParentRecursive(newParent)(expr)
-      case AssignVarStmt(_, expr, _) => setParentRecursive(newParent)(expr)
-      case AssignRefStmt(refExpr, expr, _) =>
-        setParentRecursive(newParent)(refExpr)
-        setParentRecursive(newParent)(expr)
-      case LocalVarStmt(_, expr, _) =>
-        setParentRecursive(newParent)(expr)
-      case LocalConstStmt(_, expr, _) =>
-        setParentRecursive(newParent)(expr)
-      case LocalTypeStmt(_, _, _, _) => ()
-    }
-    setParentRecursive(newParent)(expr)
-  case UnitExpr(_) => ()
-  case DotExpr(expr, _, _) => setParentRecursive(parent)(expr)
-  case FunExpr(_, _, expr, _) => setParentRecursive(parent)(expr)
-  case IfExpr(condition, ifBlock, elseBlock, _) =>
-    setParentRecursive(parent)(condition)
-    setParentRecursive(parent)(ifBlock)
-    setParentRecursive(parent)(elseBlock)
+import scala.annotation.tailrec
+import scala.collection.mutable
+
+private def setParentRecursive(module: Module, parent: Container)(expr: Expr): Unit = {
+  expr.parent = Some(module)
+
+  expr match {
+    case CallExpr(function, args, _) => (function :: args).foreach(setParentRecursive(module, parent))
+    case IdenExpr(_, _) => ()
+    case RefExpr(expr, _) => setParentRecursive(module, parent)(expr)
+    case ValExpr(expr, _) => setParentRecursive(module, parent)(expr)
+    case IntExpr(_, _) => ()
+    case BoolExpr(_, _) => ()
+    case TupleExpr(elements, _) => elements.foreach(setParentRecursive(module, parent))
+    case newParent@BlockExpr(stmts, expr, _) =>
+      newParent.module = Some(module)
+      newParent.parent = Some(parent)
+      stmts.foreach {
+        case ExprStmt(expr, _) => setParentRecursive(module, newParent)(expr)
+        case AssignVarStmt(_, expr, _) => setParentRecursive(module, newParent)(expr)
+        case AssignRefStmt(refExpr, expr, _) =>
+          setParentRecursive(module, newParent)(refExpr)
+          setParentRecursive(module, newParent)(expr)
+        case stmt@LocalVarStmt(_, expr, _) =>
+          setParentRecursive(module, newParent)(expr)
+          stmt.parent = Some(newParent)
+        case stmt@LocalConstStmt(_, expr, _) =>
+          setParentRecursive(module, newParent)(expr)
+          stmt.parent = Some(newParent)
+        case LocalTypeStmt(_, _, _, _) => ()
+      }
+      setParentRecursive(module, newParent)(expr)
+    case UnitExpr(_) => ()
+    case DotExpr(expr, _, _) => setParentRecursive(module, parent)(expr)
+    case FunExpr(_, _, expr, _) => setParentRecursive(module, parent)(expr)
+    case IfExpr(condition, ifBlock, elseBlock, _) =>
+      setParentRecursive(module, parent)(condition)
+      setParentRecursive(module, parent)(ifBlock)
+      setParentRecursive(module, parent)(elseBlock)
+  }
 }
 
 def resolveScopeParents(module: Module): Unit = {
-  module.varStmts.map(_.expr).foreach(setParentRecursive(module))
-  module.constStmts.map(_.expr).foreach(setParentRecursive(module))
+  module.varStmts.foreach(_.parent = Some(module))
+  module.constStmts.foreach(_.parent = Some(module))
+
+  module.varStmts.map(_.expr).foreach(setParentRecursive(module, module))
+  module.constStmts.map(_.expr).foreach(setParentRecursive(module, module))
 }
 
 private def reduceOptionalErrors(errors: List[Option[CompilerError]]): Option[CompilerError] = errors.flatten match {
@@ -45,7 +58,7 @@ private def reduceOptionalErrors(errors: List[Option[CompilerError]]): Option[Co
   case errors => Some(errors.reduce(_ | _))
 }
 
-private def resolveTypeExprRecursive(container: ConstAndTypeContainer, typeExpr: TypeExpr, visited: List[(TypeStmt, FilePosRange)]): Either[CompilerError, Datatype] = typeExpr match {
+private def resolveTypeExprRecursive(container: Container, typeExpr: TypeExpr, visited: List[(TypeStmt, FilePosRange)]): Either[CompilerError, Datatype] = typeExpr match {
   case UnitTypeExpr(_) => Right(UnitDatatype)
   case IdenTypeExpr(iden, range) => for {
     typeVar <- container.lookupType(iden, range)
@@ -59,7 +72,7 @@ private def resolveTypeExprRecursive(container: ConstAndTypeContainer, typeExpr:
   case FunTypeExpr(params, returnType, range) => ???
 }
 
-private def resolveTypeVar(container: ConstAndTypeContainer, typeVar: TypeVar, causeRange: FilePosRange, visited: List[(TypeStmt, FilePosRange)]): Either[CompilerError, Datatype] = typeVar.value match {
+private def resolveTypeVar(container: Container, typeVar: TypeVar, causeRange: FilePosRange, visited: List[(TypeStmt, FilePosRange)]): Either[CompilerError, Datatype] = typeVar.value match {
   case Some(datatype) => Right(datatype)
   case None =>
     val typeStmt = typeVar.stmt.get
@@ -81,7 +94,7 @@ private def resolveTypeVar(container: ConstAndTypeContainer, typeVar: TypeVar, c
     }
 }
 
-private def resolveTypes(container: ConstAndTypeContainer): Either[CompilerError, Unit] = for {
+private def resolveTypes(container: Container): Either[CompilerError, Unit] = for {
   _ <- container.typeStmts.map { typeStmt =>
     container.addType(typeStmt.typeVar)
   }.extract.mapBoth(_.reduce(_ | _), _ => ())
@@ -90,7 +103,7 @@ private def resolveTypes(container: ConstAndTypeContainer): Either[CompilerError
   }.extract.mapBoth(_.reduce(_ | _), _ => ())
 } yield ()
 
-private def resolveTypeExpr(container: ConstAndTypeContainer, typeExpr: TypeExpr): Either[CompilerError, Datatype] = typeExpr match {
+private def resolveTypeExpr(container: Container, typeExpr: TypeExpr): Either[CompilerError, Datatype] = typeExpr match {
   case UnitTypeExpr(_) => Right(UnitDatatype)
   case IdenTypeExpr(iden, range) => container.types.get(iden).map(_.value.get).toRight(Error.semantic(s"Could not resolve '$iden' as a type", range))
   case TupleTypeExpr(elements, _) => for {
@@ -101,130 +114,186 @@ private def resolveTypeExpr(container: ConstAndTypeContainer, typeExpr: TypeExpr
   case FunTypeExpr(params, returnType, range) => ???
 }
 
-private def trivialTypeOf[T <: AnyVar](container: ConstAndTypeContainer, pattern: Pattern[T]): Either[Option[CompilerError], Datatype] = pattern match {
-  case VarPattern(_, typeExprOpt, _) => for {
-    typeExpr <- typeExprOpt.toRight(None)
-    datatype <- resolveTypeExpr(container, typeExpr).mapLeft(Some.apply)
-  } yield datatype
-  case TuplePattern(elements, _) => elements.map(p => trivialTypeOf(container, p)).extract.mapBoth(reduceOptionalErrors, datatypes => TupleDatatype(datatypes, false))
+private def collectContainerConsts(container: Container): Unit = for {
+  constStmt <- container.constStmts
+  pattern <- constStmt.pattern
+} {
+  val const = Const(pattern.name, Some(constStmt))
+  module.addConst(const)
+  pattern.variable = Some(const)
 }
 
-private def trivialTypeof(container: ConstAndTypeContainer, expr: Expr): Either[Option[CompilerError], Datatype] = expr match {
-  case CallExpr(function, _, _) => for {
-    funType <- trivialTypeof(container, function)
-    newType <- funType match {
-      case FunDatatype(_, returnType, _) => Right(returnType)
-      case datatype => Left(Some(Error.semantic(s"Expected the expression to be invoked to be of a function type, found expression of type '$datatype'", function.range)))
+private def collectModuleVars(module: Module): Unit = for {
+  varStmt <- module.varStmts
+  pattern <- varStmt.pattern
+} {
+  val variable = Var(pattern.name, Some(varStmt))
+  module.addVar(variable)
+  pattern.variable = Some(variable)
+}
+
+private def computePatternType[T <: AnyVar](container: Container, pattern: Pattern[T]): Either[CompilerError, Datatype] = pattern match {
+  case VarPattern(_, typeExpr, _) => resolveTypeExpr(container, typeExpr)
+  case TuplePattern(elements, _) => elements.map(p => computePatternType(container, p)).extract.mapBoth(_.reduce(_ | _), datatypes => TupleDatatype(datatypes, true))
+}
+
+private def typeCheckRegConstStmt(container: Container, stmt: Stmt, locals: mutable.Map[Var, ConstVal], visited: List[(ConstStmt, FilePosRange)]): Either[CompilerError, Unit] = stmt match {
+  case ExprStmt(expr: Expr, range: FilePosRange) => ???
+  case AssignVarStmt(iden: String, expr: Expr, range: FilePosRange) => ???
+  case AssignRefStmt(refExpr: Expr, expr: Expr, range: FilePosRange) => ???
+  case LocalVarStmt(pattern: Pattern[Var], expr: Expr, range: FilePosRange) => ???
+}
+
+@tailrec
+private def lookupConstIden(container: Container, iden: String, range: FilePosRange): Either[CompilerError, Const] = (container.consts.get(iden), container.parent) match {
+  case (Some(List(const)), _) => Right((const, container))
+  case (None, Some(parent)) => lookupConstIden(parent, iden, range)
+  case (Some(Nil), Some(parent)) => lookupConstIden(parent, iden, range)
+  case (Some(consts), _) =>
+    val components = ErrorComponent(range, Some("Identifier that failed to be resolved")) :: consts.map(_.stmt).map {
+      case Some(stmt) => ErrorComponent(stmt.nameRange, Some("One alternative is defined here"))
+      case None => ErrorComponent(container.module.file.lastRange, Some("One alternative is defined as a builtin"))
     }
-  } yield newType
-  case IdenExpr(_, _) => Left(None)
-  case RefExpr(expr, _) => for {
-    exprType <- trivialTypeof(container, expr)
-  } yield RefDatatype(exprType, false)
-  case ValExpr(expr, _) => for {
-    exprType <- trivialTypeof(container, expr)
-    newType <- exprType match {
-      case RefDatatype(datatype, _) => Right(datatype)
-      case datatype => Left(Some(Error.semantic(s"Expected the expression to be invoked to be of a reference type, found expression of type '$datatype'", expr.range)))
+    Left(Error(Error.SEMANTIC, range.file, components, Some("Multiple alternatives when resolving a constant")))
+  case _ => Left(Error.semantic(s"Could not resolve '$iden' as a constant", range))
+}
+
+private def typeCheckConstExpr(expr: Expr, locals: mutable.Map[String, Var], visited: List[(ConstStmt, FilePosRange)]): Either[CompilerError, Datatype] = expr match {
+  // TODO: Implement overloading
+  // case CallExpr(IdenExpr(iden, idenRange), args, range) => ???
+  case CallExpr(function, args, range) => for {
+    functionType <- typeCheckConstExpr(container, function, visited)
+    argTypes <- args.map(a => typeCheckConstExpr(container, a, visited)).extract.mapLeft(_.reduce(_ | _))
+    result <- functionType match {
+      case FunDatatype(params, returnType, _) if argTypes.length == params.length && argTypes.zip(params).forall { case (a, p) => a.isSubtypeOf(p) } => Right(returnType.withMut(true))
+      case FunDatatype(params, _, _) => Left(Error.semantic(s"The arguments '${argTypes.mkString(", ")}' does not match the parameters '${params.mkString(", ")}'", range))
+      case _ => Left(Error.semantic(s"Expected the expression to be invoked to of function type, found expression of type '$functionType'"))
     }
-  } yield newType
-  case IntExpr(_, _) => Right(IntDatatype)
-  case BoolExpr(_, _) => Right(BoolDatatype)
-  case TupleExpr(elements, _) => elements.map(e => trivialTypeof(container, e)).extract.mapBoth(reduceOptionalErrors, datatypes => TupleDatatype(datatypes, false))
-  case BlockExpr(_, expr, _) => trivialTypeof(container, expr)
-  case UnitExpr(_) => Right(UnitDatatype)
-  case DotExpr(expr, iden, _) => ???
-  case FunExpr(parameterPatterns, returnTypeExpr, expr, _) => for {
-    params <- parameterPatterns.map(p => trivialTypeOf(container, p)).extract.mapLeft(reduceOptionalErrors)
-    returnType <- (for {
-      typeExpr <- returnTypeExpr.toRight(None)
-      returnType <- resolveTypeExpr(container, typeExpr).mapLeft(Some.apply)
-    } yield returnType).orElse(trivialTypeof(container, expr))
-  } yield FunDatatype(params, returnType, false)
-  case IfExpr(_, ifBlock, elseBlock, range) => for {
-    ifType <- trivialTypeof(container, ifBlock)
-    elseType <- trivialTypeof(container, elseBlock)
+  } yield result
+  case idenExpr@IdenExpr(iden, range) => idenExpr.variable match {
+    case Some(const: Const) => Right(const.datatype.get)
+    case Some(variable: Var) => ???
+    case None => locals.get(iden) match {
+      case Some(variable) =>
+        idenExpr.variable = Some(variable)
+        // TODO: We are inside a block, make sure that datatypes have already been computed for already declared variables
+        variable.datatype.get
+      case None => for {
+        const <- lookupConstIden(container, iden, range)
+        datatype <- const.datatype match {
+          case Some(datatype) => Right(datatype)
+          case None => resolveConstStmt(const.stmt.get.parent, const.stmt.get, (const.stmt.get, range) :: visited)
+        }
+      } yield {
+        idenExpr.variable = Some(const)
+        datatype
+      }
+    }
+  }
+  case RefExpr(_, range) => Left(Error.semantic("References are not allowed in compile time contexts, yet", range))
+  case ValExpr(_, range) => Left(Error.semantic("References are not allowed in compile time contexts, yet", range))
+  case IntExpr(_, _) => Right(MutIntDatatype)
+  case BoolExpr(_, _) => Right(MutBoolDatatype)
+  case TupleExpr(elements, _) => elements.map(e => typeCheckConstExpr(container, e, visited)).extract.mapBoth(_.reduce(_ | _), datatypes => TupleDatatype(datatypes, true))
+  case blockExpr@BlockExpr(stmts, expr, _) => for {
+    _ <- resolveTypes(blockExpr)
+    _ <- resolveConsts(blockExpr, visited)
+    _ <- blockExpr.regStmts.map(s => typeCheckRegConstStmt(blockExpr, s, locals, visited)).extract.mapBoth(_.reduce(_ | _), _ => ())
+    datatype <- typeCheckConstExpr(blockExpr, expr, locals, visited)
+  } yield datatype
+  case UnitExpr(range) => Right(UnitDatatype)
+  case DotExpr(expr, iden, range) => ???
+  case funExpr@FunExpr(parameterPatterns, returnTypeExpr, bodyExpr, _) => funExpr.signature match {
+    case Some(signature) => Right(signature)
+    case None => for {
+      paramTypes <- parameterPatterns.map(p => computePatternType(container, p)).extract.mapBoth(_.reduce(_ | _), _ => ())
+      returnType <- returnTypeExpr match {
+        case Some(returnTypeExpr) => resolveTypeExpr(container, returnTypeExpr)
+        case None => for {
+          returnType <- resolveExpr(container, bodyExpr, mutable.Map.empty, visited)
+        } yield {
+          funExpr.bodyTypeChecked = true
+          returnType
+        }
+      }
+    } yield {
+      val signature = FunDatatype(paramTypes, returnType, true)
+      funExpr.signature = Some(signature)
+      signature
+    }
+  }
+  case IfExpr(condition, ifBlock, elseBlock, _) => for {
+    conditionType <- typeCheckConstExpr(container, condition, visited)
+    _ <- conditionType match {
+      case BoolDatatype(_) | MutBoolDatatype(_) => Right(())
+      case _ => Left(Error.semantic(s"Expected the condition to be of boolean type, found expression of type '$conditionType'", condition.range))
+    }
+    ifType <- typeCheckConstExpr(container, ifBlock, visited)
+    elseType <- typeCheckConstExpr(container, elseBlock, visited)
     result <- (ifType, elseType) match {
       case (UnitDatatype, UnitDatatype) => Right(UnitDatatype)
-      case (_, UnitDatatype) => Right(ifType)
-      case (UnitDatatype, _) => Right(elseType)
-      case _ if ifType == elseType => Right(ifType)
-      case _ =>
-        val ifBranch = ErrorComponent(ifBlock.range, Some(s"The if branch is of type '$ifType'"))
-        val elseBranch = ErrorComponent(elseBlock.range, Some(s"The else branch is of type '$elseType'"))
-        Left(Some(Error(Error.SEMANTIC, range.file, List(ifBranch, elseBranch), Some(s"Both branches of an if statement must return the same value"))))
+      case (UnitDatatype, datatype) => Right(datatype)
+      case (datatype, UnitDatatype) => Right(datatype)
+      case (subType, superType) if subType.isSubtypeOf(superType) => Right(superType)
+      case (superType, subType) if subType.isSubtypeOf(superType) => Right(superType)
+      case (_, _) =>
+        val ifComponent = ErrorComponent(ifBlock.range, Some(s"The if branch is of type '$ifType'"))
+        val elseComponent = ErrorComponent(elseBlock.range, Some(s"The else branch is of type '$elseType'"))
+        Left(Error(Error.SEMANTIC, condition.range.file, List(ifComponent, elseComponent), Some("If expressions whose two branches are expressions of unrelated types are not allowed")))
     }
   } yield result
 }
 
-private def visitIncompletePattern(container: ConstAndTypeContainer, pattern: Pattern[Const], datatype: Datatype): Either[CompilerError, Unit] = pattern match {
-  case pattern@VarPattern(name, typeExpr, _) => typeExpr match {
-    case Some(typeExpr) => for {
-      resolvedDatatype <- resolveTypeExpr(container, typeExpr)
-      result <- if (datatype.isSubtypeOf(resolvedDatatype)) {
-        val const = Const(name, resolvedDatatype)
-        pattern.variable = Some(const)
-        container.addConst(const)
-        Right(())
-      } else {
-        Left(Error.semantic(s"Type mismatch, variable of type $resolvedDatatype does not match value of type $datatype", typeExpr.range))
-      }
-    } yield result
-    case None =>
-      val const = Const(name, datatype)
-      pattern.variable = Some(const)
-      container.addConst(const)
-      Right(())
-  }
-  case TuplePattern(patterns, range) => datatype match {
-    case TupleDatatype(datatypes, _) if patterns.length == datatypes.length => patterns.zip(datatypes).map {
-      case (p, d) => visitIncompletePattern(container, p, d)
-    }.extract.mapBoth(_.reduce(_ | _), _ => ())
-    case _ => Left(Error.semantic("The pattern did not match the return type of the expression", range))
-  }
+private def evaluateAssignment(pattern: Pattern[Var], constVal: ConstVal, locals: mutable.Map[Var, ConstVal]): Unit = (pattern, constVal) match {
+  case (varPattern: VarPattern, _) => locals(varPattern.variable.get) = constVal
+  case (TuplePattern(patterns, _), ConstTuple(values)) => patterns.zip(values).foreach { case (p, v) => evaluateAssignment(p, v, locals) }
 }
 
-private def visitCompletePattern(container: ConstAndTypeContainer, pattern: Pattern[Const]): Either[CompilerError, Unit] = pattern match {
-  case pattern@VarPattern(name, typeExpr, _) => for {
-    resolvedDatatype <- resolveTypeExpr(container, typeExpr.get)
-  } yield {
-    val const = Const(name, resolvedDatatype)
-    pattern.variable = Some(const)
-    container.addConst(const)
-    Right(())
-  }
-  case TuplePattern(elements, _) => elements.map(p => visitCompletePattern(container, p)).extract.mapBoth(_.reduce(_ | _), _ => ())
-}
-
-private def resolveConstType(container: ConstAndTypeContainer, constStmt: ConstStmt) = if (constStmt.pattern.incomplete) {
-  for {
-    datatype <- trivialTypeof(container, constStmt.expr).mapLeft(_.getOrElse(Error.semantic("Constants without complete explicit type must be trivially type inferrable (The expression cannot reference other constants, use explicit type annotations where this is not possible)", constStmt.expr.range)))
-    _ <- visitIncompletePattern(container, constStmt.pattern, datatype)
-  } yield ()
-} else {
-  visitCompletePattern(container, constStmt.pattern)
-}
-
-private def resolveConstTypes(container: ConstAndTypeContainer): Either[CompilerError, Unit] = container.constStmts.map(constStmt => resolveConstType(container, constStmt)).extract.mapBoth(_.reduce(_ | _), _ => ())
-
-private def resolveConstValue(container: ConstAndTypeContainer, constStmt: ConstStmt): Either[CompilerError, Unit] = ???
-
-private def resolveConstValues(container: ConstAndTypeContainer): Either[CompilerError, Unit] = container.constStmts.map(constStmt => resolveConstType(container, constStmt)).extract.mapBoth(_.reduce(_ | _), _ => ())
-
-private def collectModuleVars(module: Module): Unit = {
-  module.varStmts.foreach { varStmt =>
-    varStmt.pattern.foreach { case VarPattern(name, typeExpr, range) =>
-      ()
+private def evaluateConstExpr(expr: Expr, locals: mutable.Map[Var, ConstVal]): ConstVal = expr match {
+  case CallExpr(function, args, _) =>
+    val ConstFun(fun) = evaluateConstExpr(function, locals)
+    val argVals = args.map(a => evaluateConstExpr(a, locals))
+    fun match {
+      case BuiltinFun(_, _, eval, _) => eval.get(argVals)
+      case FunExpr(parameterPatterns, _, expr, _) =>
+        val newLocals: mutable.Map[Var, ConstVal] = mutable.Map.empty
+        parameterPatterns.zip(argVals).foreach { case (p, a) => evaluateAssignment(p, a, newLocals) }
+        evaluateConstExpr(expr, locals)
     }
+  case IdenExpr(iden, range) => ???
+  case RefExpr(_, range) => assert(false, "References are not allowed during compile time execution, yet")
+  case ValExpr(_, range) => assert(false, "References are not allowed during compile time execution, yet")
+  case IntExpr(int, _) => Right(ConstInt(int))
+  case BoolExpr(bool, _) => Right(ConstBool(bool))
+  case TupleExpr(elements, _) => elements.map(e => resolveConstExpr(container, e, visited)).extract.mapBoth(_.reduce(_ | _), ConstTuple.apply)
+  case blockExpr@BlockExpr(_, expr, _) =>
+    blockExpr.regStmts.foreach {
+      case ExprStmt(expr, _) => evaluateConstExpr(expr, locals)
+      case assignment@AssignVarStmt(_, expr, _) => locals(assignment.variable.get) = evaluateConstExpr(expr, locals)
+      case AssignRefStmt(_, _, _) => assert(false, "References are not allowed during compile time execution, yet")
+      case LocalVarStmt(pattern, expr, _) => evaluateAssignment(pattern, evaluateConstExpr(expr, locals))
+    }
+    evaluateConstExpr(expr, locals)
+  case UnitExpr(range) => Right(ConstUnit)
+  case DotExpr(expr, iden, range) => ???
+  case funExpr: FunExpr => ConstFun(funExpr)
+  case IfExpr(condition, ifBlock, elseBlock, _) => evaluateConstExpr(condition, locals) match {
+    case ConstBool(true) => evaluateConstExpr(ifBlock, locals)
+    case ConstBool(true) => evaluateConstExpr(elseBlock, locals)
   }
+}
 
-  Right(())
+private def typeCheckConstStmt(container: Container, constStmt: ConstStmt, visited: List[(ConstStmt, FilePosRange)]): Either[CompilerError, Unit] = {
+
+}
+
+private def evaluateConstStmt(container: Container, constStmt: ConstStmt, locals: mutable.Map[Var, ConstVal]): Either[CompilerError, Unit] = {
+
 }
 
 def semanticAnalysis(module: Module): Either[CompilerError, Unit] = {
   resolveTypes(module)
-  
-  
-  
+
+
   Right(())
 }

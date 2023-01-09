@@ -11,16 +11,16 @@ abstract class AnyVar {
   var datatype: Option[Datatype]
 }
 
-case class Var(name: String, stmt: Option[VarStmt]) extends AnyVar {
+class Var(val name: String, val stmt: Option[VarStmt]) extends AnyVar {
   var datatype: Option[Datatype] = None
 }
 
-case class Const(name: String, stmt: Option[ConstStmt]) extends AnyVar {
+class Const(val name: String, val stmt: Option[ConstStmt]) extends AnyVar {
   var datatype: Option[Datatype] = None
   var value: Option[ConstVal] = None
 }
 
-case class TypeVar(name: String, stmt: Option[TypeStmt]) {
+class TypeVar(val name: String, val stmt: Option[TypeStmt]) {
   var value: Option[Datatype] = None
 }
 
@@ -30,6 +30,7 @@ trait Fun {
 
 abstract class Expr {
   def range: FilePosRange
+  var parent: Option[Container] = None
 
   def format(indentation: Int): String = this match {
     case CallExpr(fun, List(a, b), _) => s"(${a.format(indentation)} ${fun.format(indentation)} ${b.format(indentation)})"
@@ -60,9 +61,10 @@ case class IntExpr(int: Long, range: FilePosRange) extends Expr
 case class BoolExpr(bool: Boolean, range: FilePosRange) extends Expr
 case class TupleExpr(elements: List[Expr], range: FilePosRange) extends Expr
 
-case class BlockExpr(stmts: List[Stmt], expr: Expr, range: FilePosRange) extends Expr with ConstAndTypeContainer {
-  var parent: Option[ConstAndTypeContainer] = None
-  
+case class BlockExpr(stmts: List[Stmt], expr: Expr, range: FilePosRange) extends Expr with Container {
+  var module: Option[Module] = None
+  var parent: Option[Container] = None
+
   val vars: mutable.Map[String, Var] = mutable.Map.empty
   val consts: mutable.Map[String, List[Const]] = mutable.Map.empty
   val types: mutable.Map[String, TypeVar] = mutable.Map.empty
@@ -78,6 +80,7 @@ case class DotExpr(expr: Expr, iden: String, range: FilePosRange) extends Expr
 case class FunExpr(parameterPatterns: List[Pattern[Var]], returnTypeExpr: Option[TypeExpr], expr: Expr, range: FilePosRange) extends Expr with Fun {
   var optFun: Option[opt.Fun] = None
   var signature: Option[FunDatatype] = None
+  var bodyTypeChecked: Boolean = false
 }
 
 case class BuiltinFun(parameters: List[Datatype], returnType: Datatype, eval: Option[List[ConstVal] => ConstVal], optFun: Option[opt.Fun]) extends Fun {
@@ -86,26 +89,35 @@ case class BuiltinFun(parameters: List[Datatype], returnType: Datatype, eval: Op
 
 case class IfExpr(condition: Expr, ifBlock: Expr, elseBlock: Expr, range: FilePosRange) extends Expr
 
-trait VarStmt {
-  def pattern: Pattern[Var]
+trait AnyVarStmt {
+  def range: FilePosRange
   def expr: Expr
+  def nameRange: FilePosRange
 }
 
-trait ConstStmt {
+trait VarStmt extends AnyVarStmt {
+  def parent: Option[Container]
+  def pattern: Pattern[Var]
+}
+
+trait ConstStmt extends AnyVarStmt {
+  def parent: Option[Container]
   def pattern: Pattern[Const]
-  def expr: Expr
+  var bodyTypeChecked: Boolean
   var value: Option[ConstVal]
 }
 
 trait TypeStmt {
+  def range: FilePosRange
   def name: String
   def typeExpr: TypeExpr
   def nameRange: FilePosRange
 }
 
-trait ConstAndTypeContainer {
-  def parent: Option[ConstAndTypeContainer]
-  
+trait Container {
+  def module: Option[Module]
+  def parent: Option[Container]
+
   def consts: mutable.Map[String, List[Const]]
   def types: mutable.Map[String, TypeVar]
 
@@ -133,9 +145,7 @@ trait ConstAndTypeContainer {
       types(typeVar.name) = typeVar
       Right(())
   }
-  
-  def lookupConst(name: String, nameRange: FilePosRange): Either[CompilerError, Const] = ???
-  
+
   def lookupType(name: String, nameRange: FilePosRange): Either[CompilerError, TypeVar] = types.get(name) match {
     case Some(typeVar) => Right(typeVar)
     case None => parent.map(_.lookupType(name, nameRange)) match {
@@ -165,11 +175,16 @@ abstract class Stmt {
 }
 
 case class ExprStmt(expr: Expr, range: FilePosRange) extends Stmt
-case class AssignVarStmt(iden: String, expr: Expr, range: FilePosRange) extends Stmt
+
+case class AssignVarStmt(iden: String, expr: Expr, range: FilePosRange) extends Stmt {
+  var variable: Option[Var] = None
+}
+
 case class AssignRefStmt(refExpr: Expr, expr: Expr, range: FilePosRange) extends Stmt
 case class LocalVarStmt(pattern: Pattern[Var], expr: Expr, range: FilePosRange) extends Stmt with VarStmt
 
 case class LocalConstStmt(pattern: Pattern[Const], expr: Expr, range: FilePosRange) extends Stmt with ConstStmt {
+  var bodyTypeChecked: Boolean = false
   var value: Option[ConstVal] = None
 }
 
@@ -214,6 +229,11 @@ abstract class Pattern[T <: AnyVar] {
     case pattern: VarPattern[T] => f(pattern)
     case TuplePattern(elements, _) => elements.foreach(_.foreach(f))
   }
+
+  def foreachError(f: VarPattern[T] => Either[CompilerError, Unit]): Either[CompilerError, Unit] = this match {
+    case pattern: VarPattern[T] => f(pattern)
+    case TuplePattern(elements, _) => elements.map(_.foreachError(f)).extract.mapBoth(_.reduce(_ | _), _ => ())
+  }
 }
 
 case class VarPattern[T <: AnyVar](name: String, typeExpr: Option[TypeExpr], range: FilePosRange) extends Pattern[T] {
@@ -233,10 +253,11 @@ abstract class GlobalStmt {
 }
 
 case class GlobalVarStmt(pattern: Pattern[Var], expr: Expr, range: FilePosRange) extends GlobalStmt with VarStmt {
-
+  var bodyTypeChecked: Boolean = false
 }
 
 case class GlobalConstStmt(pattern: Pattern[Const], expr: Expr, range: FilePosRange) extends GlobalStmt with ConstStmt {
+  var bodyTypeChecked: Boolean = false
   var value: Option[ConstVal] = None
 }
 
@@ -244,9 +265,10 @@ case class TypeGlobalStmt(name: String, typeExpr: TypeExpr, nameRange: FilePosRa
   val typeVar: TypeVar = TypeVar(name, Some(this))
 }
 
-case class Module(globalStmts: List[GlobalStmt], file: File) extends ConstAndTypeContainer {
-  val parent: Option[ConstAndTypeContainer] = None
-  
+case class Module(globalStmts: List[GlobalStmt], file: File) extends Container {
+  val module: Option[Module] = Some(this)
+  val parent: Option[Container] = None
+
   val vars: mutable.Map[String, List[Var]] = mutable.Map.empty
   val consts: mutable.Map[String, List[Const]] = mutable.Map.empty
   val types: mutable.Map[String, TypeVar] = mutable.Map.empty
@@ -256,8 +278,8 @@ case class Module(globalStmts: List[GlobalStmt], file: File) extends ConstAndTyp
   val typeStmts: List[TypeGlobalStmt] = globalStmts.filter(_.isInstanceOf[TypeGlobalStmt]).asInstanceOf[List[TypeGlobalStmt]]
 
   def addVar(variable: Var): Unit = vars.updateWith(variable.name) {
-    case Some(list) => variable :: list
-    case None => List(variable)
+    case Some(list) => Some(variable :: list)
+    case None => Some(List(variable))
   }
 
   def formatGlobalStmts: String = globalStmts.map(_.format(1)).mkString("\n")
