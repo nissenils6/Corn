@@ -287,9 +287,17 @@ private def typeCheckConstStmt(container: Container, constStmt: ConstStmt, visit
 
 }
 
-private def evaluateConstStmt(container: Container, constStmt: ConstStmt, locals: mutable.Map[Var, ConstVal]): Either[CompilerError, Unit] = {
-
+private def visitConstPattern(container: Container, pattern: Pattern[Const], constVal: ConstVal): Either[CompilerError, Unit] = pattern match {
+  case pattern: VarPattern[Const] => pattern.variable.get.value = Some(constVal)
+  case TuplePattern(patterns, _) =>
+    val ConstTuple(constVals) = constVal
+    patterns.zip(constVals).map { case (p, c) => visitConstPattern(container, p, c) }.extract.mapBoth(_.reduce(_ | _), _ => ())
 }
+
+private def evaluateConstStmt(container: Container, constStmt: ConstStmt): Either[CompilerError, Unit] = if (constStmt.value.isEmpty) for {
+  constVal <- evaluateConstExpr(constStmt.expr, mutable.Map.empty)
+  _ <- visitConstPattern(container, constStmt.pattern, constVal)
+} yield ()
 
 def semanticAnalysis(module: Module): Either[CompilerError, Unit] = {
   resolveTypes(module)
