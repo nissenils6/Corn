@@ -159,8 +159,6 @@ private def lookupConstIden(container: Container, iden: String, range: FilePosRa
 }
 
 private def typeCheckConstExpr(expr: Expr, locals: mutable.Map[String, Var], visited: List[(ConstStmt, FilePosRange)]): Either[CompilerError, Datatype] = expr match {
-  // TODO: Implement overloading
-  // case CallExpr(IdenExpr(iden, idenRange), args, range) => ???
   case CallExpr(function, args, range) => for {
     functionType <- typeCheckConstExpr(container, function, visited)
     argTypes <- args.map(a => typeCheckConstExpr(container, a, visited)).extract.mapLeft(_.reduce(_ | _))
@@ -172,11 +170,10 @@ private def typeCheckConstExpr(expr: Expr, locals: mutable.Map[String, Var], vis
   } yield result
   case idenExpr@IdenExpr(iden, range) => idenExpr.variable match {
     case Some(const: Const) => Right(const.datatype.get)
-    case Some(variable: Var) => ???
+    case Some(variable: Var) => Right(variable.datatype.get)
     case None => locals.get(iden) match {
       case Some(variable) =>
         idenExpr.variable = Some(variable)
-        // TODO: We are inside a block, make sure that datatypes have already been computed for already declared variables
         variable.datatype.get
       case None => for {
         const <- lookupConstIden(container, iden, range)
