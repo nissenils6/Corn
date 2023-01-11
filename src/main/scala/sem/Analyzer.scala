@@ -160,8 +160,8 @@ private def lookupConstIden(container: Container, iden: String, range: FilePosRa
 
 private def typeCheckConstExpr(expr: Expr, locals: mutable.Map[String, Var], visited: List[(ConstStmt, FilePosRange)]): Either[CompilerError, Datatype] = expr match {
   case CallExpr(function, args, range) => for {
-    functionType <- typeCheckConstExpr(container, function, visited)
-    argTypes <- args.map(a => typeCheckConstExpr(container, a, visited)).extract.mapLeft(_.reduce(_ | _))
+    functionType <- typeCheckConstExpr(function, locals, visited)
+    argTypes <- args.map(a => typeCheckConstExpr(a, locals, visited)).extract.mapLeft(_.reduce(_ | _))
     result <- functionType match {
       case FunDatatype(params, returnType, _) if argTypes.length == params.length && argTypes.zip(params).forall { case (a, p) => a.isSubtypeOf(p) } => Right(returnType.withMut(true))
       case FunDatatype(params, _, _) => Left(Error.semantic(s"The arguments '${argTypes.mkString(", ")}' does not match the parameters '${params.mkString(", ")}'", range))
@@ -191,7 +191,7 @@ private def typeCheckConstExpr(expr: Expr, locals: mutable.Map[String, Var], vis
   case ValExpr(_, range) => Left(Error.semantic("References are not allowed in compile time contexts, yet", range))
   case IntExpr(_, _) => Right(MutIntDatatype)
   case BoolExpr(_, _) => Right(MutBoolDatatype)
-  case TupleExpr(elements, _) => elements.map(e => typeCheckConstExpr(container, e, visited)).extract.mapBoth(_.reduce(_ | _), datatypes => TupleDatatype(datatypes, true))
+  case TupleExpr(elements, _) => elements.map(e => typeCheckConstExpr(e, locals, visited)).extract.mapBoth(_.reduce(_ | _), datatypes => TupleDatatype(datatypes, true))
   case blockExpr@BlockExpr(stmts, expr, _) => for {
     _ <- resolveTypes(blockExpr)
     _ <- resolveConsts(blockExpr, visited)
@@ -280,20 +280,39 @@ private def evaluateConstExpr(expr: Expr, locals: mutable.Map[Var, ConstVal]): C
   }
 }
 
-private def typeCheckConstStmt(container: Container, constStmt: ConstStmt, visited: List[(ConstStmt, FilePosRange)]): Either[CompilerError, Unit] = {
+val c: Boolean = ???
+val e1: Any = ???
+val e2: Any = ???
 
+val i1 = if c then e1 else e2
+
+val i2 = if (c) {
+  e1
+} else {
+  e2
 }
 
-private def visitConstPattern(container: Container, pattern: Pattern[Const], constVal: ConstVal): Either[CompilerError, Unit] = pattern match {
+private def typeCheckConstStmt(container: Container, constStmt: ConstStmt, visited: List[(ConstStmt, FilePosRange)]): Either[CompilerError, Unit] = for {
+  datatype <- typeCheckConstExpr(constStmt.expr, mutable.Map.empty, visited)
+  _ <- if (constStmt.bodyTypeChecked) {
+
+    Right(())
+  } else Right(())
+} yield {
+
+  ()
+}
+
+private def visitAssignConstPattern(container: Container, pattern: Pattern[Const], constVal: ConstVal): Either[CompilerError, Unit] = pattern match {
   case pattern: VarPattern[Const] => pattern.variable.get.value = Some(constVal)
   case TuplePattern(patterns, _) =>
     val ConstTuple(constVals) = constVal
-    patterns.zip(constVals).map { case (p, c) => visitConstPattern(container, p, c) }.extract.mapBoth(_.reduce(_ | _), _ => ())
+    patterns.zip(constVals).map { case (p, c) => visitAssignConstPattern(container, p, c) }.extract.mapBoth(_.reduce(_ | _), _ => ())
 }
 
 private def evaluateConstStmt(container: Container, constStmt: ConstStmt): Either[CompilerError, Unit] = if (constStmt.value.isEmpty) for {
   constVal <- evaluateConstExpr(constStmt.expr, mutable.Map.empty)
-  _ <- visitConstPattern(container, constStmt.pattern, constVal)
+  _ <- visitAssignConstPattern(container, constStmt.pattern, constVal)
 } yield ()
 
 def semanticAnalysis(module: Module): Either[CompilerError, Unit] = {
