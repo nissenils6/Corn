@@ -24,9 +24,9 @@ def injectBinaryOp(module: Module, name: String, eval: List[ConstVal] => ConstVa
   op.next = opt.Ret(List(opt.Data(Some(op), index)))
   val optFun = Some(new opt.Fun(op, opt.FunDatatype(params.map(_.optDatatype), List(returnType.optDatatype)), List()))
 
-  val signature = FunDatatype(params, returnType, false)
-  val globalConst = Const(name, signature)
+  val globalConst = Const(name, None)
   globalConst.value = Some(ConstFun(BuiltinFun(params, returnType, Some(eval), optFun)))
+  globalConst.datatype = Some(FunDatatype(params, returnType, false))
   module.addConst(globalConst)
 }
 
@@ -37,9 +37,9 @@ def injectCompOp(module: Module, name: String, eval: List[ConstVal] => ConstVal,
   op.next = opt.Ret(List(opt.Data(op)))
   val optFun = Some(new opt.Fun(subOp, opt.FunDatatype(params.map(_.optDatatype), List(returnType.optDatatype)), List()))
 
-  val signature = FunDatatype(params, returnType, false)
-  val globalConst = Const(name, signature)
+  val globalConst = Const(name, None)
   globalConst.value = Some(ConstFun(BuiltinFun(params, returnType, Some(eval), optFun)))
+  globalConst.datatype = Some(FunDatatype(params, returnType, false))
   module.addConst(globalConst)
 }
 
@@ -48,9 +48,9 @@ def injectPrintln(module: Module): Unit = {
   op.next = opt.Ret(List(opt.Data(op)))
   val optFun = Some(new opt.Fun(op, opt.FunDatatype(List(opt.IntDatatype), List(opt.UnitDatatype)), List()))
 
-  val signature = FunDatatype(unaryInt, IntDatatype, false)
-  val globalConst = Const("println", signature)
+  val globalConst = Const("println", None)
   globalConst.value = Some(ConstFun(BuiltinFun(unaryInt, IntDatatype, None, optFun)))
+  globalConst.datatype = Some(FunDatatype(unaryInt, IntDatatype, false))
   module.addConst(globalConst)
 }
 

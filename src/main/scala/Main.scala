@@ -193,6 +193,7 @@ def processHelpFlag(parsedArgs: ParsedArgs, cmdLine: File): Either[CompilerError
   module <- parseFile(tokens, file)
   _ = resolveScopeParents(module)
   _ = injectBuiltins(module)
+  _ <- semanticAnalysis(module)
 } yield {
   println(tokens.mkString(" "))
   println()

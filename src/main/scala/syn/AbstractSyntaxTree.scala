@@ -63,7 +63,6 @@ case class TupleExpr(elements: List[Expr], range: FilePosRange) extends Expr
 
 case class BlockExpr(stmts: List[Stmt], expr: Expr, range: FilePosRange) extends Expr with Container {
   var module: Option[Module] = None
-  var parent: Option[Container] = None
 
   val vars: mutable.Map[String, Var] = mutable.Map.empty
   val consts: mutable.Map[String, List[Const]] = mutable.Map.empty
@@ -112,6 +111,7 @@ trait TypeStmt {
   def name: String
   def typeExpr: TypeExpr
   def nameRange: FilePosRange
+  def typeVar: TypeVar
 }
 
 trait Container {
@@ -121,8 +121,8 @@ trait Container {
   def consts: mutable.Map[String, List[Const]]
   def types: mutable.Map[String, TypeVar]
 
-  def constStmts: List[LocalConstStmt]
-  def typeStmts: List[LocalTypeStmt]
+  def constStmts: List[ConstStmt]
+  def typeStmts: List[TypeStmt]
 
   def addConst(const: Const): Unit = if (consts.contains(const.name)) {
     consts(const.name) = const :: consts(const.name)
@@ -156,12 +156,12 @@ trait Container {
 
   def formatConsts(indentation: Int): String = (for {
     constList <- consts.values
-    const@Const(name, datatype) <- constList
-  } yield s"${" " * (indentation + 1)}$name : $datatype : ${const.value.map(_.toString).getOrElse("???")}\n").mkString(s"${" " * indentation}consts {\n", "", s"${" " * indentation}}\n")
+    const <- constList
+  } yield s"${" " * (indentation + 1)}${const.name} : ${const.datatype.map(_.toString).getOrElse("???")} : ${const.value.map(_.toString).getOrElse("???")}\n").mkString(s"${" " * indentation}consts {\n", "", s"${" " * indentation}}\n")
 
   def formatTypes(indentation: Int): String = (for {
-    typeVar@TypeVar(name, _) <- types.values
-  } yield s"${" " * (indentation + 1)}$name = ${typeVar.value.map(_.toString).getOrElse("???")}\n").mkString(s"${" " * indentation}consts {\n", "", s"${" " * indentation}}\n")
+    typeVar <- types.values
+  } yield s"${" " * (indentation + 1)}${typeVar.name} = ${typeVar.value.map(_.toString).getOrElse("???")}\n").mkString(s"${" " * indentation}consts {\n", "", s"${" " * indentation}}\n")
 }
 
 abstract class Stmt {
@@ -169,8 +169,8 @@ abstract class Stmt {
     case ExprStmt(expr, _) => expr.format(indentation)
     case AssignVarStmt(iden, expr, _) => s"$iden = ${expr.format(indentation)}"
     case AssignRefStmt(refExpr, expr, _) => s"!${refExpr.format(indentation)} = ${expr.format(indentation)}"
-    case LocalVarStmt(pattern, expr, _) => s"${pattern.format(indentation)} = ${expr.format(indentation)}"
-    case LocalConstStmt(pattern, expr, _) => s"${pattern.format(indentation)} : ${expr.format(indentation)}"
+    case LocalVarStmt(pattern, expr, _, _) => s"${pattern.format(indentation)} = ${expr.format(indentation)}"
+    case LocalConstStmt(pattern, expr, _, _) => s"${pattern.format(indentation)} : ${expr.format(indentation)}"
   }) + ";\n"
 }
 
@@ -181,9 +181,13 @@ case class AssignVarStmt(iden: String, expr: Expr, range: FilePosRange) extends 
 }
 
 case class AssignRefStmt(refExpr: Expr, expr: Expr, range: FilePosRange) extends Stmt
-case class LocalVarStmt(pattern: Pattern[Var], expr: Expr, range: FilePosRange) extends Stmt with VarStmt
 
-case class LocalConstStmt(pattern: Pattern[Const], expr: Expr, range: FilePosRange) extends Stmt with ConstStmt {
+case class LocalVarStmt(pattern: Pattern[Var], expr: Expr, nameRange: FilePosRange, range: FilePosRange) extends Stmt with VarStmt {
+  var parent: Option[Container] = None
+}
+
+case class LocalConstStmt(pattern: Pattern[Const], expr: Expr, nameRange: FilePosRange, range: FilePosRange) extends Stmt with ConstStmt {
+  var parent: Option[Container] = None
   var bodyTypeChecked: Boolean = false
   var value: Option[ConstVal] = None
 }
@@ -246,17 +250,19 @@ abstract class GlobalStmt {
   def range: FilePosRange
 
   def format(indentation: Int): String = this match {
-    case GlobalVarStmt(pattern, expr, _) => s"${" " * indentation}${pattern.format(indentation)} = ${expr.format(indentation)}\n"
-    case GlobalConstStmt(pattern, expr, _) => s"${" " * indentation}${pattern.format(indentation)} : ${expr.format(indentation)}\n"
+    case GlobalVarStmt(pattern, expr, _, _) => s"${" " * indentation}${pattern.format(indentation)} = ${expr.format(indentation)}\n"
+    case GlobalConstStmt(pattern, expr, _, _) => s"${" " * indentation}${pattern.format(indentation)} : ${expr.format(indentation)}\n"
     case TypeGlobalStmt(name, typeExpr, _, _) => s"${" " * indentation}type $name = $typeExpr\n"
   }
 }
 
-case class GlobalVarStmt(pattern: Pattern[Var], expr: Expr, range: FilePosRange) extends GlobalStmt with VarStmt {
+case class GlobalVarStmt(pattern: Pattern[Var], expr: Expr, nameRange: FilePosRange, range: FilePosRange) extends GlobalStmt with VarStmt {
+  var parent: Option[Container] = None
   var bodyTypeChecked: Boolean = false
 }
 
-case class GlobalConstStmt(pattern: Pattern[Const], expr: Expr, range: FilePosRange) extends GlobalStmt with ConstStmt {
+case class GlobalConstStmt(pattern: Pattern[Const], expr: Expr, nameRange: FilePosRange, range: FilePosRange) extends GlobalStmt with ConstStmt {
+  var parent: Option[Container] = None
   var bodyTypeChecked: Boolean = false
   var value: Option[ConstVal] = None
 }

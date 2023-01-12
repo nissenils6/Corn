@@ -17,17 +17,17 @@ lazy val parseAssignRefStmt: Parser[Stmt] = for {
   endRange <- parseSymbol(";")
 } yield AssignRefStmt(refExpr, expr, startRange | endRange)
 
-def parseDeclareStmt[T, T2 <: AnyVar](c: Char, f: (Pattern[T2], Expr, FilePosRange) => T): Parser[T] = (for {
+def parseDeclareStmt[T, T2 <: AnyVar](c: Char, f: (Pattern[T2], Expr, FilePosRange, FilePosRange) => T): Parser[T] = (for {
   (iden, range) <- parseIden
   _ <- parseSymbol(":" + c)
   expr <- parseExpr
   endRange <- parseSymbol(";")
-} yield f(VarPattern(iden, None, range), expr, range | endRange)) <|> (for {
+} yield f(VarPattern(iden, None, range), expr, range, range | endRange)) <|> (for {
   pattern <- parsePattern
   _ <- parseSymbol("" + c)
   expr <- parseExpr
   endRange <- parseSymbol(";")
-} yield f(pattern.asInstanceOf[Pattern[T2]], expr, pattern.range | endRange))
+} yield f(pattern.asInstanceOf[Pattern[T2]], expr, pattern.range, pattern.range | endRange))
 
 lazy val parseTypeStmt: Parser[GlobalStmt] = for {
   startRange <- parseKeyword("type")
