@@ -33,7 +33,6 @@ abstract class Expr {
   var parent: Option[Container] = None
 
   def format(indentation: Int): String = this match {
-    case CallExpr(fun, List(a, b), _) => s"(${a.format(indentation)} ${fun.format(indentation)} ${b.format(indentation)})"
     case CallExpr(fun, args, _) => s"${fun.format(indentation)}(${args.map(_.format(indentation)).mkString(", ")})"
     case IdenExpr(iden, _) => iden
     case RefExpr(expr, _) => s"@${expr.format(indentation)}"
@@ -41,7 +40,7 @@ abstract class Expr {
     case IntExpr(int, _) => int.toString
     case BoolExpr(bool, _) => bool.toString
     case TupleExpr(elements, _) => s"(${elements.map(_.format(indentation)).mkString(", ")})"
-    case BlockExpr(stmts, expr, _) => s"{\n${stmts.map(_.format(indentation + 1)).mkString}${" " * (indentation + 1)}${expr.format(indentation + 1)}\n${" " * indentation}}"
+    case blockExpr@BlockExpr(stmts, expr, _) => s"{\n${blockExpr.formatConsts(indentation)}\n${blockExpr.formatTypes(indentation)}\n${stmts.map(_.format(indentation + 1)).mkString}${" " * (indentation + 1)}${expr.format(indentation + 1)}\n${" " * indentation}}"
     case UnitExpr(_) => "()"
     case DotExpr(expr, iden, _) => s"${expr.format(indentation)}.$iden"
     case FunExpr(parameters, returnType, expr, _) => s"(${parameters.map(_.format(indentation)).mkString(", ")})${returnType.map(": " + _).getOrElse("")} => ${expr.format(indentation)}"
@@ -290,5 +289,5 @@ case class Module(globalStmts: List[GlobalStmt], file: File) extends Container {
 
   def formatGlobalStmts: String = globalStmts.map(_.format(1)).mkString("\n")
 
-  def format: String = s"module ${file.name} {\n ${formatConsts(1)}\n${formatTypes(1)}\n$formatGlobalStmts\n}"
+  def format: String = s"module ${file.name} {\n${formatConsts(1)}\n${formatTypes(1)}\n$formatGlobalStmts\n}"
 }

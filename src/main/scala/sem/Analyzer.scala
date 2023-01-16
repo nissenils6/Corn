@@ -206,11 +206,13 @@ private def typeCheckConstExpr(expr: Expr, locals: mutable.Map[String, Var], vis
   case IntExpr(_, _) => Right(MutIntDatatype)
   case BoolExpr(_, _) => Right(MutBoolDatatype)
   case TupleExpr(elements, _) => elements.map(e => typeCheckConstExpr(e, locals, visited)).extract.mapBoth(_.reduce(_ | _), datatypes => TupleDatatype(datatypes, true))
-  case blockExpr@BlockExpr(_, expr, _) => for {
-    _ <- resolveTypes(blockExpr)
-    _ <- blockExpr.regStmts.map(s => typeCheckRegConstStmt(blockExpr, s, locals, visited)).extract.mapBoth(_.reduce(_ | _), _ => ())
-    datatype <- typeCheckConstExpr(expr, locals, visited)
-  } yield datatype
+  case blockExpr@BlockExpr(_, expr, _) =>
+    val newLocals = locals.clone()
+    for {
+      _ <- resolveTypes(blockExpr)
+      _ <- blockExpr.regStmts.map(s => typeCheckRegConstStmt(blockExpr, s, newLocals, visited)).extract.mapBoth(_.reduce(_ | _), _ => ())
+      datatype <- typeCheckConstExpr(expr, newLocals, visited)
+    } yield datatype
   case UnitExpr(range) => Right(UnitDatatype)
   case DotExpr(expr, iden, range) => ???
   case funExpr@FunExpr(parameterPatterns, returnTypeExpr, bodyExpr, _) => funExpr.signature match {
@@ -355,7 +357,54 @@ private def evaluateConstStmt(container: Container, constStmt: ConstStmt): Eithe
   _ <- visitAssignConstPattern(container, constStmt.pattern, constVal)
 } yield ()*/
 
-private def typeCheckExpr(expr: Expr, locals: mutable.Map[String, Var], visited: List[(ConstStmt, FilePosRange)]): Either[CompilerError, Datatype] = ???
+private def typeCheckPattern(container: Container, varStmt: VarStmt, pattern: Pattern[Var], datatype: Datatype, locals: mutable.Map[String, Var]): Either[CompilerError, Unit] = pattern match {
+  case pattern@VarPattern(name, typeExpr, range) => for {
+    typedDatatype <- resolveTypeExpr(container, typeExpr)
+    _ <- if (datatype.isSubtypeOf(typedDatatype)) {
+      val variable = Var(name, Some(varStmt))
+      pattern.variable = Some(variable)
+      locals(name) = variable
+    } else {
+      Left(Error.semantic(s"type '$datatype' does not match type '$typedDatatype'", range))
+    }
+  } yield ()
+  case TuplePattern(patterns, range) => datatype match {
+    case TupleDatatype(datatypes, _) if patterns.length == datatypes.length => patterns.zip(datatypes).map { case (p, d) => typeCheckPattern(container, varStmt, p, d, locals) }.extract.mapBoth(_.reduce(_ | _), _ => ())
+    case TupleDatatype(datatypes, _) => Left(Error.semantic(s"Expected the expression to be of tuple type with ${patterns.length} elements to match a tuple pattern, found expression of tuple type with '${datatypes.length} elements'", range))
+    case _ => Left(Error.semantic(s"Expected the expression to be of tuple type to match a tuple pattern, found expression of type '$datatype'", range))
+  }
+}
+
+private def typeCheckRegStmt(container: Container, stmt: Stmt, locals: mutable.Map[String, Var], visited: List[(ConstStmt, FilePosRange)]): Either[CompilerError, Unit] = stmt match {
+  case ExprStmt(expr, range) => ???
+  case AssignVarStmt(iden, expr, range) => ???
+  case AssignRefStmt(refExpr, expr, range) => ???
+  case varStmt@LocalVarStmt(pattern, expr, _, range) => for {
+    datatype <- typeCheckExpr(expr, locals, visited)
+    _ <- typeCheckPattern(container, varStmt, pattern, datatype, locals)
+  } yield ()
+}
+
+private def typeCheckExpr(expr: Expr, locals: mutable.Map[String, Var], visited: List[(ConstStmt, FilePosRange)]): Either[CompilerError, Datatype] = expr match {
+  case CallExpr(function, args, range) => ???
+  case idenExpr@IdenExpr(iden, range) => ???
+  case RefExpr(_, range) => ???
+  case ValExpr(_, range) => ???
+  case IntExpr(_, _) => ???
+  case BoolExpr(_, _) => ???
+  case TupleExpr(elements, _) => ???
+  case blockExpr@BlockExpr(_, expr, _) =>
+    val newLocals = locals.clone()
+    for {
+      _ <- resolveTypes(blockExpr)
+      _ <- blockExpr.regStmts.map(s => typeCheckRegStmt(blockExpr, s, newLocals, visited)).extract.mapBoth(_.reduce(_ | _), _ => ())
+      datatype <- typeCheckExpr(expr, newLocals, visited)
+    } yield datatype
+  case UnitExpr(range) => ???
+  case DotExpr(expr, iden, range) => ???
+  case funExpr@FunExpr(parameterPatterns, returnTypeExpr, bodyExpr, _) => ???
+  case IfExpr(condition, ifBlock, elseBlock, _) => ???
+}
 
 def semanticAnalysis(module: Module): Either[CompilerError, Unit] = for {
   _ <- resolveTypes(module)
