@@ -40,7 +40,7 @@ abstract class Expr {
     case IntExpr(int, _) => int.toString
     case BoolExpr(bool, _) => bool.toString
     case TupleExpr(elements, _) => s"(${elements.map(_.format(indentation)).mkString(", ")})"
-    case blockExpr@BlockExpr(stmts, expr, _) => s"{\n${blockExpr.formatConsts(indentation)}\n${blockExpr.formatTypes(indentation)}\n${stmts.map(_.format(indentation + 1)).mkString}${" " * (indentation + 1)}${expr.format(indentation + 1)}\n${" " * indentation}}"
+    case blockExpr@BlockExpr(stmts, expr, _) => s"{\n${blockExpr.formatConsts(indentation + 1)}\n${blockExpr.formatTypes(indentation + 1)}\n${stmts.map(_.format(indentation + 1)).mkString}${" " * (indentation + 1)}${expr.format(indentation + 1)}\n${" " * indentation}}"
     case UnitExpr(_) => "()"
     case DotExpr(expr, iden, _) => s"${expr.format(indentation)}.$iden"
     case FunExpr(parameters, returnType, expr, _) => s"(${parameters.map(_.format(indentation)).mkString(", ")})${returnType.map(": " + _).getOrElse("")} => ${expr.format(indentation)}"
@@ -156,11 +156,11 @@ trait Container {
   def formatConsts(indentation: Int): String = (for {
     constList <- consts.values
     const <- constList
-  } yield s"${" " * (indentation + 1)}${const.name} : ${const.datatype.map(_.toString).getOrElse("???")} : ${const.value.map(_.toString).getOrElse("???")}\n").mkString(s"${" " * indentation}consts {\n", "", s"${" " * indentation}}\n")
+  } yield s"${" " * (indentation + 1)}${const.name.padTo(16, ' ')} : ${const.datatype.map(_.toString).getOrElse("???").padTo(32, ' ')} : ${const.value.map(_.toString).getOrElse("???")}\n").mkString(s"${" " * indentation}consts {\n", "", s"${" " * indentation}}\n")
 
   def formatTypes(indentation: Int): String = (for {
     typeVar <- types.values
-  } yield s"${" " * (indentation + 1)}${typeVar.name} = ${typeVar.value.map(_.toString).getOrElse("???")}\n").mkString(s"${" " * indentation}consts {\n", "", s"${" " * indentation}}\n")
+  } yield s"${" " * (indentation + 1)}${typeVar.name} = ${typeVar.value.map(_.toString).getOrElse("???")}\n").mkString(s"${" " * indentation}types {\n", "", s"${" " * indentation}}\n")
 }
 
 abstract class Stmt {
@@ -170,6 +170,7 @@ abstract class Stmt {
     case AssignRefStmt(refExpr, expr, _) => s"!${refExpr.format(indentation)} = ${expr.format(indentation)}"
     case LocalVarStmt(pattern, expr, _, _) => s"${pattern.format(indentation)} = ${expr.format(indentation)}"
     case LocalConstStmt(pattern, expr, _, _) => s"${pattern.format(indentation)} : ${expr.format(indentation)}"
+    case LocalTypeStmt(name, typeExpr, _, _) => s"type $name = $typeExpr"
   }) + ";\n"
 }
 
@@ -251,7 +252,7 @@ abstract class GlobalStmt {
   def format(indentation: Int): String = this match {
     case GlobalVarStmt(pattern, expr, _, _) => s"${" " * indentation}${pattern.format(indentation)} = ${expr.format(indentation)}\n"
     case GlobalConstStmt(pattern, expr, _, _) => s"${" " * indentation}${pattern.format(indentation)} : ${expr.format(indentation)}\n"
-    case TypeGlobalStmt(name, typeExpr, _, _) => s"${" " * indentation}type $name = $typeExpr\n"
+    case GlobalTypeStmt(name, typeExpr, _, _) => s"${" " * indentation}type $name = $typeExpr\n"
   }
 }
 
@@ -266,7 +267,7 @@ case class GlobalConstStmt(pattern: Pattern[Const], expr: Expr, nameRange: FileP
   var value: Option[ConstVal] = None
 }
 
-case class TypeGlobalStmt(name: String, typeExpr: TypeExpr, nameRange: FilePosRange, range: FilePosRange) extends GlobalStmt with TypeStmt {
+case class GlobalTypeStmt(name: String, typeExpr: TypeExpr, nameRange: FilePosRange, range: FilePosRange) extends GlobalStmt with TypeStmt {
   val typeVar: TypeVar = TypeVar(name, Some(this))
 }
 
@@ -280,7 +281,7 @@ case class Module(globalStmts: List[GlobalStmt], file: File) extends Container {
 
   val varStmts: List[GlobalVarStmt] = globalStmts.filter(_.isInstanceOf[GlobalVarStmt]).asInstanceOf[List[GlobalVarStmt]]
   val constStmts: List[GlobalConstStmt] = globalStmts.filter(_.isInstanceOf[GlobalConstStmt]).asInstanceOf[List[GlobalConstStmt]]
-  val typeStmts: List[TypeGlobalStmt] = globalStmts.filter(_.isInstanceOf[TypeGlobalStmt]).asInstanceOf[List[TypeGlobalStmt]]
+  val typeStmts: List[GlobalTypeStmt] = globalStmts.filter(_.isInstanceOf[GlobalTypeStmt]).asInstanceOf[List[GlobalTypeStmt]]
 
   def addVar(variable: Var): Unit = vars.updateWith(variable.name) {
     case Some(list) => Some(variable :: list)

@@ -29,13 +29,13 @@ def parseDeclareStmt[T, T2 <: AnyVar](c: Char, f: (Pattern[T2], Expr, FilePosRan
   endRange <- parseSymbol(";")
 } yield f(pattern.asInstanceOf[Pattern[T2]], expr, pattern.range, pattern.range | endRange))
 
-lazy val parseTypeStmt: Parser[GlobalStmt] = for {
+def parseTypeStmt[T](f: (String, TypeExpr, FilePosRange, FilePosRange) => T): Parser[T] = for {
   startRange <- parseKeyword("type")
   (iden, idenRange) <- parseIden
   _ <- parseSymbol("=")
   typeExpr <- parseType
   endRange <- parseSymbol(";")
-} yield TypeGlobalStmt(iden, typeExpr, idenRange, startRange | endRange)
+} yield f(iden, typeExpr, idenRange, startRange | endRange)
 
 lazy val parseExprStmt: Parser[Stmt] = for {
   expr <- parseExpr
@@ -44,10 +44,12 @@ lazy val parseExprStmt: Parser[Stmt] = for {
 
 lazy val parseDeclareVar = parseDeclareStmt('=', LocalVarStmt.apply)
 lazy val parseDeclareConst = parseDeclareStmt(':', LocalConstStmt.apply)
+lazy val parseDeclareType = parseTypeStmt(LocalTypeStmt.apply)
 
-lazy val parseStmt: Parser[Stmt] = parseAssignVarStmt <|> parseAssignRefStmt <|> parseDeclareVar <|> parseDeclareConst <|> parseExprStmt
+lazy val parseStmt: Parser[Stmt] = parseAssignVarStmt <|> parseAssignRefStmt <|> parseDeclareType <|> parseDeclareVar <|> parseDeclareConst <|> parseExprStmt
 
 lazy val parseDeclareGlobalVar = parseDeclareStmt('=', GlobalVarStmt.apply)
 lazy val parseDeclareGlobalConst = parseDeclareStmt(':', GlobalConstStmt.apply)
+lazy val parseDeclareGlobalType = parseTypeStmt(GlobalTypeStmt.apply)
 
-lazy val parseGlobalStmts: Parser[List[GlobalStmt]] = (parseTypeStmt <|> parseDeclareGlobalVar <|> parseDeclareGlobalConst).many
+lazy val parseGlobalStmts: Parser[List[GlobalStmt]] = (parseDeclareGlobalType <|> parseDeclareGlobalVar <|> parseDeclareGlobalConst).many

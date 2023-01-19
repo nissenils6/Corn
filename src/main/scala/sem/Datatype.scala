@@ -20,9 +20,9 @@ abstract class Datatype {
 
   def isSubtypeOf(datatype: Datatype): Boolean = (this, datatype) match {
     case (UnitDatatype, UnitDatatype) => true
-    case (IntDatatype | MutIntDatatype, IntDatatype | MutIntDatatype) => !mutable || datatype.mutable
-    case (BoolDatatype | MutBoolDatatype, BoolDatatype | MutBoolDatatype) => !mutable || datatype.mutable
-    case (RefDatatype(datatype1, mutable1), RefDatatype(datatype2, mutable2)) => datatype1.isSubtypeOf(datatype2) && (!mutable1 || mutable2)
+    case (IntDatatype | MutIntDatatype, IntDatatype | MutIntDatatype) => !datatype.mutable || mutable
+    case (BoolDatatype | MutBoolDatatype, BoolDatatype | MutBoolDatatype) => !datatype.mutable || mutable
+    case (RefDatatype(datatype1, mutable1), RefDatatype(datatype2, mutable2)) => datatype1.isSubtypeOf(datatype2) && (!mutable2 || mutable1)
     case (TupleDatatype(elements1, _), TupleDatatype(elements2, _)) => elements1.zip(elements2).forall { case (e1, e2) => e1.isSubtypeOf(e2) }
     case (FunDatatype(params1, returnType1, _), FunDatatype(params2, returnType2, _)) => params1.zip(params2).forall { case (p1, p2) => p2.isSubtypeOf(p1) } && returnType1.isSubtypeOf(returnType2)
     case _ => false
