@@ -9,6 +9,7 @@ import scala.collection.mutable
 abstract class AnyVar {
   def name: String
   var datatype: Option[Datatype]
+  def stmt: Option[AnyVarStmt]
 }
 
 class Var(val name: String, val stmt: Option[VarStmt]) extends AnyVar {

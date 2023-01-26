@@ -145,7 +145,7 @@ private def typeCheckConstExpr(expr: Expr, locals: mutable.Map[String, Var], vis
           }
       }
     } yield {
-      val signature = FunDatatype(paramTypes, returnType, true)
+      val signature = FunDatatype(paramTypes, returnType.withMut(false), true)
       funExpr.signature = Some(signature)
       signature
     }
@@ -309,7 +309,26 @@ private def typeCheckExpr(expr: Expr, locals: mutable.Map[String, Var], visited:
   case UnitExpr(range) => Right(UnitDatatype)
   case DotExpr(expr, iden, range) => ???
   case funExpr@FunExpr(parameterPatterns, returnTypeExpr, bodyExpr, _) => ???
-  case IfExpr(condition, ifBlock, elseBlock, _) => ???
+  case IfExpr(condition, ifBlock, elseBlock, _) => for {
+    conditionType <- typeCheckExpr(condition, locals, visited)
+    _ <- conditionType match {
+      case BoolDatatype | MutBoolDatatype => Right(())
+      case _ => Left(Error.semantic(s"Expected the condition to be of boolean type, found expression of type '$conditionType'", condition.range))
+    }
+    ifType <- typeCheckExpr(ifBlock, locals, visited)
+    elseType <- typeCheckExpr(elseBlock, locals, visited)
+    result <- (ifType, elseType) match {
+      case (UnitDatatype, UnitDatatype) => Right(UnitDatatype)
+      case (UnitDatatype, datatype) => Right(datatype)
+      case (datatype, UnitDatatype) => Right(datatype)
+      case (subType, superType) if subType.isSubtypeOf(superType) => Right(superType)
+      case (superType, subType) if subType.isSubtypeOf(superType) => Right(superType)
+      case (_, _) =>
+        val ifComponent = ErrorComponent(ifBlock.range, Some(s"The if branch is of type '$ifType'"))
+        val elseComponent = ErrorComponent(elseBlock.range, Some(s"The else branch is of type '$elseType'"))
+        Left(Error(Error.SEMANTIC, condition.range.file, List(ifComponent, elseComponent), Some("If expressions whose two branches are expressions of unrelated types are not allowed")))
+    }
+  } yield result
 }
 
 def semanticAnalysis(module: Module): Either[CompilerError, Unit] = for {

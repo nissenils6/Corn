@@ -30,7 +30,12 @@ private def evaluateConstExpr(expr: Expr, locals: mutable.Map[Var, ConstVal]): C
         parameterPatterns.zip(argVals).foreach { case (p, a) => evaluateAssignment(p, a, newLocals) }
         evaluateConstExpr(expr, locals)
     }
-  case IdenExpr(iden, range) => ???
+  case idenExpr@IdenExpr(iden, range) => idenExpr.variable.get.asInstanceOf[Const].value match {
+    case Some(value) => value
+    case None =>
+      idenExpr.variable.get.asInstanceOf[Const].stmt
+      idenExpr.variable.get.asInstanceOf[Const].value.get
+  }
   case RefExpr(_, range) => assert(false, "References are not allowed during compile time execution, yet")
   case ValExpr(_, range) => assert(false, "References are not allowed during compile time execution, yet")
   case IntExpr(int, _) => ConstInt(int)
@@ -52,3 +57,5 @@ private def evaluateConstExpr(expr: Expr, locals: mutable.Map[Var, ConstVal]): C
     case ConstBool(false) => evaluateConstExpr(elseBlock, locals)
   }
 }
+
+private def evaluateConstStmt()
